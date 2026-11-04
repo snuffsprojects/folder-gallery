@@ -47,19 +47,31 @@ node .\gallery.js "D:\Photos"
 ```text
 Photos/
   gallery.js
-  landscape.jpg        → Main folder
+  landscape.jpg        → Files on Home
   Holidays/
-    beach.jpg          → Holidays
+    beach.jpg          → Files inside Holidays
     Winter/
-      snow.png         → Winter (path: Holidays/Winter)
+      snow.png         → Home → Holidays → Winter
   Family/
-    birthday.webp      → Family
+    birthday.webp      → Home → Family
 ```
 
-Each folder with directly contained images becomes a gallery. Nested folders
-get separate galleries; their images are not duplicated in the parent gallery.
-Empty folders and folders containing only other folders do not create empty
-cards. Relative folder paths distinguish galleries with the same name.
+The gallery preserves the real folder hierarchy. **Home** shows the immediate
+subfolders of your selected root, plus directly contained media under **Files in
+this folder**. Open a folder to see its immediate subfolders and its own media;
+nested files are never mixed into the parent's image grid.
+
+Folders containing only subfolders, and completely empty folders, remain visible.
+Folder cards show matching file counts and sizes for their whole branch and can
+use a descendant image as a cover. The actual media grid and its pagination only
+include files directly in the open folder.
+
+Use **Back** to move up one level, or click a breadcrumb such as
+**Home → Holidays → Winter** to jump to an ancestor. The **Home** breadcrumb returns
+to the root. Search finds folders anywhere in the collection and shows their full
+relative paths, so identically named folders in different branches remain distinct.
+Opening a search result clears the search and takes you straight to that folder;
+its breadcrumbs and Back button follow the real folder hierarchy.
 
 Supported: JPG/JPEG, PNG, GIF, WebP, AVIF, BMP and WebM. Browser format and codec
 support still applies. Hidden files/folders, symlinks and `node_modules` folders are skipped. Files are
@@ -67,11 +79,12 @@ served without importing, renaming, deleting or uploading anything.
 
 ## Viewing
 
-- Search by gallery name or relative folder path.
+- Search all folders by name or relative path. Clear the search to return to the
+  top-level folder list. Root-level media is hidden while search results are shown.
 - Sort by name (A–Z or Z–A), modified date (newest or oldest), or size (largest
   or smallest). Sorting is applied before pagination and uses the active file-type
-  filters. Gallery cards use the relative folder name, newest matching image's
-  modification time, or total matching file size. Images use their own filename,
+  filters. Folder cards use the folder name, newest matching media's modification
+  time anywhere in the branch, or total matching file size in that branch. Images use their own filename,
   modified date, or file size. Sorting controls on both pages stay synchronized;
   changing the order returns to page 1 without rescanning the folders.
 - In the full-screen viewer, choose **Info** (or press **I**) to see filename,
@@ -84,12 +97,16 @@ served without importing, renaming, deleting or uploading anything.
   Filters apply to gallery covers, counts, storage totals, pagination and
   full-screen navigation. Changing types returns to page 1 and uses the in-memory
   index without rescanning folders. The two filter bars stay synchronized.
-- 30 files per page, with numbered navigation at the top and bottom.
+  Folder structure stays visible even when no files match the selected types.
+- 30 directly contained files per page, with numbered navigation at the top and
+  bottom, including for files shown on Home.
 - Full-screen viewing, Previous/Next and Left/Right arrow keys across pages.
 - Zoom buttons, mouse wheel, double-click zoom and drag to pan when zoomed.
-- Escape closes the image, then the gallery; floating arrows return to the top.
+- Escape closes the image, then returns from a folder to Home; **Back** moves up
+  one folder level. Floating arrows return to the top.
 - **Refresh folders** rescans after adding, moving or removing images. The index
-  is kept in memory, with no repeated background scans or files written to disk.
+  is kept in memory, with no repeated background scans or index files written to disk.
+  Only optional thumbnail generation writes cache files in your user cache folder.
 
 Images are served directly from their existing locations. Pagination limits
 image requests and API responses to the selected page, with browser lazy loading.
@@ -289,7 +306,7 @@ node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails] [--n
 
 ```bash
 node --check gallery.js
-node --test gallery.test.js thumbnail.test.js video.test.js
+node --test gallery.test.js thumbnail.test.js video.test.js hierarchy.test.js
 ```
 
 Automated checks cover folder discovery, nested-folder separation, sorting,
@@ -312,6 +329,10 @@ Set `FOLDER_GALLERY_TEST_FFMPEG=1` to include real video extraction tests with
 `ffmpeg` and `ffprobe` installed. Set both variables to test both upgrades together.
 Video tests cover short clips, unusual filenames, cached WebP output, invalidation,
 unavailable/disabled processing, access boundaries and unchanged byte-range playback.
+Hierarchy tests cover immediate-child navigation, folders with no direct media,
+empty folders, root media pagination and viewing, recursive totals, filters,
+duplicate names, special paths, breadcrumbs, parent navigation, search, rescans
+and responses arriving after the user has navigated elsewhere.
 
 ## Contributing
 

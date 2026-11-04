@@ -26,6 +26,19 @@ If the script lives elsewhere, you can give it the media folder explicitly:
 node "C:\Tools\Folder Gallery\gallery.js" "D:\Photos"
 ```
 
+## Browse your folders
+
+Home shows immediate subfolders and directly contained media. Open a folder to
+see its own subfolders and files; the hierarchy matches File Explorer, including
+empty folders and folders containing only subfolders. Use **Back** to move up a
+level, or breadcrumbs such as **Home → Holidays → Winter** to jump to an ancestor.
+
+Search finds folders anywhere in the collection and shows their relative paths.
+Opening a result clears search and takes you to that folder. Folder-card counts
+and sizes include their whole branch; the media grid shows only directly
+contained files, with 30 files per page. Filters retain the folder structure even
+when no files match.
+
 ## Optional: faster image previews with Sharp
 
 Stop the gallery, open a terminal in the folder containing `gallery.js`, and run:

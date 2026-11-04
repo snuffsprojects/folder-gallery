@@ -62,16 +62,22 @@ node .\gallery.js "D:\My Photos"
 Go to **http://127.0.0.1:4180** on the same computer. Leave the terminal running
 while you browse. Press **Ctrl+C** in the terminal when you want to stop.
 
-Each folder with media appears as its own gallery. Files directly alongside the
-script appear under **Main folder**. Nested folders are separate galleries.
+The gallery follows your actual folder structure. **Home** shows the top-level
+folders and any directly contained media under **Files in this folder**. Opening
+a folder shows its immediate subfolders and directly contained media. Empty
+folders and folders containing only subfolders stay visible.
 
-- Use the search box to find a folder.
+- Use **Back** to move up one folder level, or the breadcrumbs to jump to an
+  ancestor, such as **Home → Holidays → Winter**.
+- Use the search box to find folders anywhere in the collection. Results show
+  their relative paths; opening one jumps to that folder in the hierarchy.
 - Turn file types on or off, or use **Clear** and select just one type.
-- Choose a sort order; gallery pages contain up to 30 files.
+- Choose a sort order; each page contains up to 30 files from the current folder.
+  Folder-card counts include matching files in their subfolders too.
 - Select a picture to view it. Use arrows to navigate, or zoom and drag to pan.
 - Select a WebM tile, then press Play. Only the selected video can play.
 - Choose **Info**, or press **I**, to inspect the selected file.
-- Press **Escape** to close the viewer.
+- Press **Escape** to close the image, then return from a folder to Home.
 - After adding or moving files, choose **Refresh folders**.
 
 ## 5. View from another device (optional)

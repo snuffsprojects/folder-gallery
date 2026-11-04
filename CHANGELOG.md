@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve the actual folder hierarchy with immediate-child navigation, ancestor breadcrumbs and a Back button.
+- Show root-level media on Home, keep empty/container-only folders visible and search across all folder paths.
+- Use recursive file counts, sizes and covers for folder cards while keeping each media grid local to its folder.
+- Cache filtered folder views and test navigation, root pagination, duplicate names, rescans and stale responses.
 - Optional FFmpeg support for cached WebM still-frame previews with a play badge, independent of Sharp.
 - Automatic FFmpeg detection, first-frame fallback for short clips, bounded processing and badge fallback on failures.
 - Shared image/video cache and `--no-video-thumbnails` to disable only video extraction.

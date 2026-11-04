@@ -35,9 +35,14 @@ const natural = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base
 const mediaUrl = relative => '/media/' + relative.split(path.sep).map(encodeURIComponent).join('/');
 
 async function scanFolders(root) {
-  const albums = new Map();
+  const albums = new Map(), folders = new Map();
   const warnings = [];
   async function visit(dir) {
+    const relative = path.relative(root, dir);
+    const id = relative.split(path.sep).join('/') || '.';
+    const parentId = id === '.' ? null : relative.includes(path.sep) ? path.dirname(relative).split(path.sep).join('/') : '.';
+    const folder = { id, parentId, name: relative ? path.basename(dir) : 'Main folder', folder: relative.split(path.sep).join('/'), count: 0, bytes: 0, cover: null, coverType: 'image', images: [] };
+    folders.set(id, folder);
     let entries;
     try { entries = await fsp.readdir(dir, { withFileTypes: true }); }
     catch (error) { warnings.push(`Could not read ${path.relative(root, dir) || 'Main folder'} (${error.code}).`); return; }
@@ -55,14 +60,33 @@ async function scanFolders(root) {
         } catch (error) { warnings.push(`Could not read ${path.relative(root, full)} (${error.code}).`); }
       }
     }
-    if (images.length) {
-      const relative = path.relative(root, dir);
-      const id = relative.split(path.sep).join('/') || '.';
-      albums.set(id, { id, name: relative ? path.basename(dir) : 'Main folder', folder: relative.split(path.sep).join('/'), count: images.length, bytes: images.reduce((sum, item) => sum + item.bytes, 0), cover: images[0].url, coverType: images[0].type, images });
-    }
+    Object.assign(folder, { images, count: images.length, bytes: images.reduce((sum, item) => sum + item.bytes, 0), cover: images[0]?.url || null, coverType: images[0]?.type || 'image' });
+    if (images.length) albums.set(id, folder);
   }
   await visit(root);
-  return { albums, warnings };
+  return { albums, folders, warnings };
+}
+
+function buildFolderView(data, formats, sort) {
+  const view = new Map([...data.folders].map(([id, folder]) => {
+    const filtered = filterAlbum(folder, formats, sort);
+    return [id, { ...filtered, children: [], totalCount: filtered.count, totalBytes: filtered.bytes, totalModifiedMs: filtered.modifiedMs }];
+  }));
+  // Scanning inserts parents before their children, so aggregate from the leaves.
+  for (const folder of [...view.values()].reverse()) {
+    const parent = view.get(folder.parentId);
+    if (!parent) continue;
+    parent.children.push(folder.id);
+    parent.totalCount += folder.totalCount; parent.totalBytes += folder.totalBytes;
+    parent.totalModifiedMs = Math.max(parent.totalModifiedMs, folder.totalModifiedMs);
+    if (!parent.cover && folder.cover) { parent.cover = folder.cover; parent.coverType = folder.coverType; }
+  }
+  return view;
+}
+
+function folderSummary(folder) {
+  const { images, children, ...summary } = folder;
+  return { ...summary, directCount: folder.count, count: folder.totalCount, bytes: folder.totalBytes, modifiedMs: folder.totalModifiedMs, childCount: children.length };
 }
 
 function sendJson(req, res, status, data) {
@@ -214,11 +238,20 @@ async function createGallery(root, { host = '127.0.0.1', thumbnails = true, vide
   }) : null;
   let index;
   let scanning;
+  const folderViews = new Map();
   async function getIndex(refresh = false) {
     if (scanning) return scanning;
     if (index && !refresh) return index;
-    scanning = scanFolders(root).then(result => (index = result)).finally(() => { scanning = null; });
+    scanning = scanFolders(root).then(result => { folderViews.clear(); return (index = result); }).finally(() => { scanning = null; });
     return scanning;
+  }
+  function getFolderView(data, formats, sort) {
+    const key = sort + ':' + (formats ? [...formats].sort().join(',') : FORMATS.join(','));
+    if (!folderViews.has(key)) {
+      if (folderViews.size >= 16) folderViews.delete(folderViews.keys().next().value);
+      folderViews.set(key, buildFolderView(data, formats, sort));
+    }
+    return folderViews.get(key);
   }
   const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -239,19 +272,23 @@ async function createGallery(root, { host = '127.0.0.1', thumbnails = true, vide
       if (url.pathname === '/api/albums') {
         const data = await getIndex(url.searchParams.get('refresh') === '1');
         const formats = selectedFormats(url);
-        const albums = [...data.albums.values()].map(album => filterAlbum(album, formats, sort)).filter(album => album.count);
-        return sendJson(req, res, 200, { root: path.basename(root), thumbnails: imagePreviews, videoThumbnails: videoPreviews, totalImages: [...data.albums.values()].reduce((sum, album) => sum + album.count, 0), albums: albums.sort((a, b) => compareItems(a, b, sort, 'folder')).map(({ images, ...album }) => album), warnings: data.warnings });
+        const view = getFolderView(data, formats, sort);
+        const albums = [...view.values()].filter(album => album.count);
+        const folders = [...view.values()].filter(folder => folder.id !== '.').map(folderSummary).sort((a, b) => compareItems(a, b, sort, 'folder'));
+        const { images, children, ...rootAlbum } = view.get('.');
+        return sendJson(req, res, 200, { root: path.basename(root), rootAlbum, folders, thumbnails: imagePreviews, videoThumbnails: videoPreviews, totalImages: [...data.albums.values()].reduce((sum, album) => sum + album.count, 0), albums: albums.sort((a, b) => compareItems(a, b, sort, 'folder')).map(({ images, children, ...album }) => album), warnings: data.warnings });
       }
       if (url.pathname === '/api/gallery') {
         const data = await getIndex();
-        const original = data.albums.get(url.searchParams.get('id'));
-        if (!original) return sendJson(req, res, 404, { error: 'Gallery not found. Try refreshing the folders.' });
-        const album = filterAlbum(original, selectedFormats(url), sort);
+        const view = getFolderView(data, selectedFormats(url), sort);
+        const album = view.get(url.searchParams.get('id'));
+        if (!album) return sendJson(req, res, 404, { error: 'Folder not found. Try refreshing the folders.' });
         const page = Number(url.searchParams.get('page') || 1);
         const pages = Math.max(1, Math.ceil(album.count / PAGE_SIZE));
         if (!Number.isSafeInteger(page) || page < 1 || page > pages) return sendJson(req, res, 400, { error: 'Invalid page.' });
-        const { images, ...summary } = album;
-        return sendJson(req, res, 200, { ...summary, page, pages, pageSize: PAGE_SIZE, images: images.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) });
+        const { images, children, ...summary } = album;
+        const childFolders = children.map(id => folderSummary(view.get(id))).sort((a, b) => compareItems(a, b, sort));
+        return sendJson(req, res, 200, { ...summary, children: childFolders, page, pages, pageSize: PAGE_SIZE, images: images.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) });
       }
       if (url.pathname.startsWith('/media/')) {
         let relative;
@@ -315,7 +352,7 @@ function browserApp() {
   const $ = selector => document.querySelector(selector);
   const video = $('#video');
   const home = $('#home'), viewer = $('#viewer'), lightbox = $('#lightbox'), grid = $('#photos'), photo = $('#photo');
-  let albums = [], current = null, pageData = null, page = 1, selected = 0, requestId = 0;
+  let albums = [], rootAlbum = null, current = null, pageData = null, page = 1, selected = 0, requestId = 0;
   const formats = ['jpg', 'png', 'gif', 'webp', 'avif', 'bmp', 'webm'];
   let enabledTypes = new Set(formats), totalImages = 0, albumsRequest = 0, thumbnailsEnabled = false, videoThumbnailsEnabled = false;
   let sortOrder = 'name-asc', selectedItem = null;
@@ -370,11 +407,12 @@ function browserApp() {
     for (const id of ['#type-filters', '#viewer-type-filters']) {
       formats.forEach((type, index) => { $(id).children[index].children[0].checked = enabledTypes.has(type); });
     }
+    lightbox.close(); imageRequest++; requestId++;
     refresh(false);
     if (viewer.open) {
-      lightbox.close(); imageRequest++; pageData = null;
+      pageData = null;
       grid.replaceChildren();
-      document.querySelectorAll('.pagination').forEach(controls => controls.replaceChildren());
+      document.querySelectorAll('.viewer .pagination').forEach(controls => controls.replaceChildren());
       loadPage(1, true);
     }
   }
@@ -383,21 +421,48 @@ function browserApp() {
     $('#sort-order').value = value; $('#viewer-sort-order').value = value;
     applyTypes();
   }
+  function renderFolderCards(folders, container, showPath = false) {
+    container.replaceChildren();
+    for (const album of folders) {
+      const button = node('button', 'album'); button.type = 'button';
+      const cover = node('div', 'cover'); cover.append(album.cover ? preview(album, true) : node('span', 'folder-preview', '📁'), node('span', 'open-label', 'OPEN FOLDER ↗'));
+      const info = node('div', 'album-info'); info.append(node('strong', '', album.name), node('span', '', `${album.count} files · ${bytes(album.bytes)}`));
+      if (showPath && album.folder) info.append(node('small', '', album.folder));
+      button.append(cover, info); button.addEventListener('click', () => openAlbum(album)); container.append(button);
+    }
+  }
   function renderAlbums() {
     const query = $('#search').value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-    const filtered = albums.filter(album => query.every(term => `${album.name} ${album.folder}`.toLocaleLowerCase().includes(term)));
-    $('#albums').replaceChildren();
-    for (const album of filtered) {
-      const button = node('button', 'album'); button.type = 'button';
-      const cover = node('div', 'cover'); cover.append(preview(album, true), node('span', 'open-label', 'OPEN GALLERY ↗'));
-      const info = node('div', 'album-info'); info.append(node('strong', '', album.name), node('span', '', `${album.count} files · ${bytes(album.bytes)}`));
-      if (album.folder) info.append(node('small', '', album.folder));
-      button.append(cover, info); button.addEventListener('click', () => openAlbum(album)); $('#albums').append(button);
-    }
-    $('#results').textContent = query.length ? `${filtered.length} of ${albums.length} galleries match` : 'One folder. One gallery. Everything stays where it is.';
-    $('#empty').hidden = filtered.length > 0;
-    $('#empty-title').textContent = totalImages ? 'No matching galleries' : 'No media found yet';
-    $('#empty-copy').textContent = totalImages ? 'Try another name or enable more file types.' : 'Add images or WebM videos to this folder or its subfolders, then choose Refresh folders.';
+    const filtered = albums.filter(album => query.length
+      ? query.every(term => `${album.name} ${album.folder}`.toLocaleLowerCase().includes(term))
+      : (album.parentId ?? '.') === '.');
+    renderFolderCards(filtered, $('#albums'), Boolean(query.length));
+    $('#root-files').hidden = Boolean(query.length) || !rootAlbum?.count;
+    $('#results').textContent = query.length ? `${filtered.length} folders match across the collection` : `${filtered.length} folders · Browse your collection one folder at a time.`;
+    $('#empty').hidden = filtered.length > 0 || (!query.length && rootAlbum?.count > 0);
+    $('#empty-title').textContent = query.length ? 'No matching folders' : totalImages ? 'No matching files' : 'This folder is empty';
+    $('#empty-copy').textContent = query.length ? 'Try another folder name or path.' : totalImages ? 'Enable more file types to see your media.' : 'Add media or subfolders, then choose Refresh folders.';
+  }
+  function renderBreadcrumbs() {
+    const crumbs = $('#folder-breadcrumbs'); crumbs.replaceChildren();
+    const homeButton = node('button', '', 'Home'); homeButton.type = 'button';
+    homeButton.addEventListener('click', () => viewer.close()); crumbs.append(homeButton);
+    const parts = current.folder.split('/').filter(Boolean);
+    parts.forEach((part, i) => {
+      const separator = node('span', '', '›'); separator.setAttribute('aria-hidden', 'true'); crumbs.append(separator);
+      if (i === parts.length - 1) { const label = node('span', '', part); label.setAttribute('aria-current', 'page'); crumbs.append(label); }
+      else {
+        const button = node('button', '', part); button.type = 'button';
+        button.addEventListener('click', () => openAlbum({ id: parts.slice(0, i + 1).join('/'), name: part, folder: parts.slice(0, i + 1).join('/') }));
+        crumbs.append(button);
+      }
+    });
+  }
+  function showRoot() {
+    if (!rootAlbum || viewer.open) return;
+    current = rootAlbum; pageData = null; page = 1;
+    $('#root-photos').replaceChildren();
+    loadPage(1);
   }
   async function refresh(rescan = true) {
     const token = ++albumsRequest;
@@ -407,18 +472,21 @@ function browserApp() {
       if (token !== albumsRequest) return;
       thumbnailsEnabled = Boolean(data.thumbnails);
       videoThumbnailsEnabled = Boolean(data.videoThumbnails);
-      albums = data.albums; totalImages = data.totalImages ?? albums.reduce((sum, album) => sum + album.count, 0);
+      albums = data.folders || data.albums; rootAlbum = data.rootAlbum || null;
+      totalImages = data.totalImages ?? data.albums.reduce((sum, album) => sum + album.count, 0);
       $('#root-name').textContent = data.root;
-      $('#totals').textContent = `${albums.length} galleries · ${albums.reduce((sum, album) => sum + album.count, 0).toLocaleString()} files · ${bytes(albums.reduce((sum, album) => sum + album.bytes, 0))}`;
+      $('#totals').textContent = `${albums.length} folders · ${(rootAlbum?.totalCount ?? totalImages).toLocaleString()} matching files · ${bytes(rootAlbum?.totalBytes ?? data.albums.reduce((sum, album) => sum + album.bytes, 0))}`;
       $('#message').textContent = data.warnings.length ? data.warnings.join(' ') : '';
       renderAlbums();
+      if (!viewer.open) showRoot();
     } catch (error) { if (token === albumsRequest) $('#message').textContent = error.message; }
     finally { if (token === albumsRequest) $('#refresh').disabled = false; }
   }
   function changePage(next) { lightbox.close(); loadPage(next, true); }
   function renderPagination() {
-    for (const controls of document.querySelectorAll('.pagination')) {
+    for (const controls of document.querySelectorAll(viewer.open ? '.viewer .pagination' : '.root-pagination')) {
       controls.replaceChildren();
+      controls.hidden = !current.count;
       const prev = node('button', 'secondary', '← Previous'); prev.disabled = page <= 1; prev.addEventListener('click', () => changePage(page - 1));
       const numbers = node('div', 'numbers');
       const visible = Array.from({ length: pageData.pages }, (_, i) => i + 1).filter(i => pageData.pages <= 7 || i === 1 || i === pageData.pages || Math.abs(i - page) <= 2);
@@ -435,29 +503,50 @@ function browserApp() {
     }
   }
   async function loadPage(next, scroll = false) {
+    if (!current) return false;
+    const folderId = current.id;
+    const isRoot = folderId === '.';
     const token = ++requestId;
-    $('#viewer-error').textContent = '';
-    viewer.setAttribute('aria-busy', 'true');
+    const errorLabel = $(isRoot ? '#root-error' : '#viewer-error');
+    const targetGrid = isRoot ? $('#root-photos') : grid;
+    errorLabel.textContent = '';
+    (isRoot ? home : viewer).setAttribute('aria-busy', 'true');
     try {
-      const data = await json(`/api/gallery?id=${encodeURIComponent(current.id)}&page=${next}${typeQuery()}${sortQuery()}`);
-      if (token !== requestId || !viewer.open) return false;
-      current = data; pageData = data; page = data.page; grid.replaceChildren();
+      const data = await json(`/api/gallery?id=${encodeURIComponent(folderId)}&page=${next}${typeQuery()}${sortQuery()}`);
+      if (token !== requestId || current?.id !== folderId || (isRoot ? viewer.open : !viewer.open)) return false;
+      current = data; pageData = data; page = data.page; targetGrid.replaceChildren();
+      if (!isRoot) {
+        renderFolderCards(data.children || [], $('#folder-children'));
+        $('#folder-children').hidden = !data.children?.length;
+        $('#album-title').textContent = data.name;
+        $('#album-folder').textContent = data.folder;
+        renderBreadcrumbs();
+      }
       data.images.forEach((item, offset) => {
         const button = node('button', 'photo-tile'); button.setAttribute('aria-label', `View ${item.name}`); button.append(preview(item));
-        button.addEventListener('click', () => openImage((page - 1) * data.pageSize + offset)); grid.append(button);
+        button.addEventListener('click', () => openImage((page - 1) * data.pageSize + offset)); targetGrid.append(button);
       });
-      $('#viewer-empty').hidden = data.count > 0;
+      if (!isRoot) {
+        $('#viewer-empty').hidden = data.count > 0;
+        $('#viewer-empty').textContent = data.children?.length ? 'Open a subfolder above to browse its files.'
+          : enabledTypes.size < formats.length ? 'No files match these types. Enable more types or choose All types.' : 'This folder has no supported media.';
+      }
       renderPagination();
-      if (scroll) { viewer.scrollTop = 0; updateTop(); }
+      if (scroll) { if (isRoot) window.scrollTo({ top: $('#root-files').offsetTop, behavior: 'instant' }); else viewer.scrollTop = 0; updateTop(); }
       return true;
-    } catch (error) { if (token === requestId) $('#viewer-error').textContent = error.message; return false; }
-    finally { if (token === requestId) viewer.setAttribute('aria-busy', 'false'); }
+    } catch (error) { if (token === requestId) errorLabel.textContent = error.message; return false; }
+    finally { if (token === requestId) (isRoot ? home : viewer).setAttribute('aria-busy', 'false'); }
   }
   function openAlbum(album) {
+    lightbox.close(); imageRequest++;
+    $('#search').value = ''; renderAlbums();
     current = album; pageData = null; page = 1; grid.replaceChildren(); $('#viewer-empty').hidden = true;
-    document.querySelectorAll('.pagination').forEach(controls => controls.replaceChildren());
+    document.querySelectorAll('.viewer .pagination').forEach(controls => controls.replaceChildren());
+    $('#folder-children').replaceChildren();
     $('#album-title').textContent = album.name; $('#album-folder').textContent = album.folder || 'Main folder';
-    viewer.showModal(); viewer.scrollTop = 0; updateTop(); loadPage(1);
+    renderBreadcrumbs();
+    if (!viewer.open) viewer.showModal();
+    viewer.scrollTop = 0; updateTop(); loadPage(1);
   }
   function transform() { photo.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; $('#zoom-reset').textContent = `${Math.round(zoom * 100)}%`; $('#stage').classList.toggle('zoomed', zoom > 1); }
   function resetZoom() { zoom = 1; panX = panY = 0; drag = null; transform(); }
@@ -471,7 +560,7 @@ function browserApp() {
     index = (index + count) % count;
     const targetPage = Math.floor(index / pageData.pageSize) + 1;
     if (targetPage !== page && !await loadPage(targetPage)) return;
-    if (token !== imageRequest || !viewer.open) return;
+    if (token !== imageRequest || (!viewer.open && current?.id !== '.')) return;
     selected = index;
     const item = pageData.images[index % pageData.pageSize];
     stopMedia(); selectedItem = item;
@@ -527,8 +616,12 @@ function browserApp() {
   video.addEventListener('loadedmetadata', () => { if (selectedItem?.type === 'video') renderImageInfo(true); });
   video.addEventListener('error', () => { if (selectedItem?.type !== 'video' || !video.getAttribute('src')) return; $('#image-error').hidden = false; renderImageInfo(false, true); });
   $('#refresh').addEventListener('click', () => refresh()); $('#search').addEventListener('input', renderAlbums);
-  $('#close-album').addEventListener('click', () => viewer.close());
-  viewer.addEventListener('close', () => { requestId++; imageRequest++; if (lightbox.open) lightbox.close(); stopMedia(); grid.replaceChildren(); current = pageData = null; updateTop(); });
+  $('#close-album').addEventListener('click', () => {
+    const parent = current?.parentId || current?.folder.split('/').slice(0, -1).join('/') || '.';
+    if (parent === '.') viewer.close();
+    else openAlbum(albums.find(album => album.id === parent) || { id: parent, name: parent.split('/').pop(), folder: parent });
+  });
+  viewer.addEventListener('close', () => { requestId++; imageRequest++; if (lightbox.open) lightbox.close(); stopMedia(); grid.replaceChildren(); current = pageData = null; updateTop(); showRoot(); });
   $('#close-image').addEventListener('click', () => lightbox.close());
   lightbox.addEventListener('close', () => { imageRequest++; stopMedia(); selectedItem = null; $('#image-info').hidden = true; $('#toggle-info').setAttribute('aria-expanded', 'false'); resetZoom(); });
   $('#previous-image').addEventListener('click', () => openImage(selected - 1)); $('#next-image').addEventListener('click', () => openImage(selected + 1));
@@ -556,14 +649,15 @@ const HTML = String.raw`<!doctype html>
 .sort-control{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin-top:20px}.sort-control select{min-height:42px;max-width:100%;padding:0 12px;background:var(--panel);border:1px solid var(--line);border-radius:4px;color:var(--text);font:inherit}.sort-control select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.viewer-sort{margin:0 clamp(16px,4vw,52px)}.info-toggle{position:fixed;top:18px;left:18px;z-index:5}.image-info{position:fixed;z-index:5;right:20px;bottom:64px;width:min(330px,calc(100% - 40px));max-height:calc(100dvh - 150px);overflow:auto;padding:20px;background:#12161cf5;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 30px #0009}.image-info h3{margin:0 0 16px;font-size:16px}.image-info dl{margin:0;display:grid;gap:4px}.image-info dt{color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase}.image-info dd{margin:0 0 10px;font-size:13px;overflow-wrap:anywhere;user-select:text}@media(max-width:650px){.info-toggle{top:70px;left:12px}.image-info{max-height:40dvh;right:16px;bottom:64px;width:calc(100% - 32px)}}
 .video-preview{position:relative;display:grid;place-content:center;gap:12px;min-height:180px;width:100%;height:100%;background:linear-gradient(145deg,#171e29,#0b0f14);text-align:center}.play-symbol{font-size:40px;color:var(--accent)}.video-badge{font-size:11px;letter-spacing:.16em;color:var(--muted)}#video{max-width:100%;max-height:calc(100dvh - 180px);width:auto}.stage.video-stage{cursor:default;touch-action:auto;align-content:center;gap:12px}.download-video{font-size:13px;color:var(--accent)}
 .video-preview.has-preview{aspect-ratio:4/3;overflow:hidden}.video-preview>img{position:absolute;inset:0;width:100%;height:100%;min-height:0;object-fit:cover}.video-preview.has-preview::after{content:'';position:absolute;inset:0;background:#0004}.video-preview>.play-symbol,.video-preview>.video-badge{position:relative;z-index:1;text-shadow:0 2px 5px #000}.video-preview.has-preview>.play-symbol{color:white}.video-preview.has-preview>.video-badge{color:white}
+.folder-preview{font-size:58px}.folder-children{padding:24px clamp(16px,4vw,52px);margin-top:12px}.breadcrumbs{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;margin-bottom:8px}.breadcrumbs button{background:transparent;border:0;padding:4px 0;color:var(--accent);text-decoration:underline}.breadcrumbs [aria-current]{color:var(--text)}.root-files{margin-top:36px}.root-files>.photos{padding:24px 0}.root-files>.pagination{margin:0}#root-error{color:#ffb294}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <header><div class="brand"><span class="mark">FG</span>Folder Gallery</div><span class="local-label">LOCAL FILES · SIMPLE PLEASURES</span></header>
 <main id="home"><section class="intro"><div><p class="eyebrow">YOUR LOCAL COLLECTION · <span id="root-name">FOLDERS</span></p><h1>A place for your pictures.</h1><p id="totals">Discovering your galleries…</p></div><button id="refresh" class="secondary" type="button">↻ Refresh folders</button></section>
-<label class="search"><span>Find a gallery</span><input id="search" type="search" placeholder="Search folder names…" autocomplete="off" aria-controls="albums" aria-describedby="results"></label>${sortControl('sort-order')}<fieldset class="format-filter"><legend>File types</legend><div id="type-filters" class="type-filters"></div></fieldset><p id="results" class="muted" role="status"></p><p id="message" role="status"></p>
-<div id="albums" class="albums"></div><section id="empty" hidden><h2 id="empty-title"></h2><p id="empty-copy"></p></section><footer>Made from your folders. No uploads. No imports. Your originals stay untouched.</footer></main>
+<label class="search"><span>Find a folder</span><input id="search" type="search" placeholder="Search folder names…" autocomplete="off" aria-controls="albums" aria-describedby="results"></label>${sortControl('sort-order')}<fieldset class="format-filter"><legend>File types</legend><div id="type-filters" class="type-filters"></div></fieldset><p id="results" class="muted" role="status"></p><p id="message" role="status"></p>
+<div id="albums" class="albums"></div><section id="empty" hidden><h2 id="empty-title"></h2><p id="empty-copy"></p></section><section id="root-files" class="root-files" hidden><h2>Files in this folder</h2><nav class="pagination root-pagination" aria-label="Home file pages at top"></nav><p id="root-error" role="alert"></p><div id="root-photos" class="photos"></div><nav class="pagination root-pagination" aria-label="Home file pages at bottom"></nav></section><footer>Made from your folders. No uploads. No imports. Your originals stay untouched.</footer></main>
 <button id="top-home" class="top" aria-label="Back to top" title="Back to top" hidden>↑</button>
-<dialog id="viewer" class="viewer" aria-labelledby="album-title"><div class="viewer-bar"><div><small id="album-folder"></small><h2 id="album-title"></h2></div><button id="close-album" class="secondary" type="button">← Galleries</button></div><div class="viewer-sort">${sortControl('viewer-sort-order')}</div><fieldset class="format-filter viewer-filter"><legend>File types</legend><div id="viewer-type-filters" class="type-filters"></div></fieldset><nav class="pagination" aria-label="Gallery pages at top"></nav><p id="viewer-error" role="alert"></p><p id="viewer-empty" class="muted viewer-empty" role="status" hidden>No files match these types. Enable a type above or choose All types.</p><div id="photos" class="photos"></div><nav class="pagination" aria-label="Gallery pages at bottom"></nav><button id="top-viewer" class="top" aria-label="Back to top of gallery" title="Back to top" hidden>↑</button></dialog>
+<dialog id="viewer" class="viewer" aria-labelledby="album-title"><div class="viewer-bar"><div><nav id="folder-breadcrumbs" class="breadcrumbs" aria-label="Folder path"></nav><small id="album-folder"></small><h2 id="album-title"></h2></div><button id="close-album" class="secondary" type="button">← Back</button></div><div class="viewer-sort">${sortControl('viewer-sort-order')}</div><fieldset class="format-filter viewer-filter"><legend>File types</legend><div id="viewer-type-filters" class="type-filters"></div></fieldset><div id="folder-children" class="albums folder-children"></div><nav class="pagination" aria-label="Gallery pages at top"></nav><p id="viewer-error" role="alert"></p><p id="viewer-empty" class="muted viewer-empty" role="status" hidden>No files match these types. Enable a type above or choose All types.</p><div id="photos" class="photos"></div><nav class="pagination" aria-label="Gallery pages at bottom"></nav><button id="top-viewer" class="top" aria-label="Back to top of gallery" title="Back to top" hidden>↑</button></dialog>
 <dialog id="lightbox" class="lightbox" aria-label="Full-screen media"><button id="toggle-info" class="secondary info-toggle" type="button" aria-controls="image-info" aria-expanded="false" title="File information (I)">ⓘ Info</button><aside id="image-info" class="image-info" aria-label="File information" hidden><h3>File information</h3><dl id="image-details"></dl></aside><button id="close-image" class="icon lightbox-close" aria-label="Close media">×</button><div id="zoom-tools" class="zoom-tools" aria-label="Image zoom"><button id="zoom-out" class="icon" aria-label="Zoom out">−</button><button id="zoom-reset" class="secondary" aria-label="Reset zoom">100%</button><button id="zoom-in" class="icon" aria-label="Zoom in">+</button></div><button id="previous-image" class="image-nav previous-image" aria-label="Previous item">‹</button><figure id="stage" class="stage" style="margin:0"><img id="photo" alt="" draggable="false"><video id="video" controls playsinline muted preload="metadata" hidden></video><a id="download-video" class="download-video" hidden>Download original WebM</a><figcaption id="caption"></figcaption></figure><p id="image-error" role="alert" hidden>This file cannot be displayed. It may have moved or be unsupported by your browser. For a video, try downloading the original.</p><button id="next-image" class="image-nav next-image" aria-label="Next item">›</button></dialog>
 <script>(${browserApp.toString()})();</script></body></html>`;
 

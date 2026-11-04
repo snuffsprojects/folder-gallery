@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Optional FFmpeg support for cached WebM still-frame previews with a play badge, independent of Sharp.
+- Automatic FFmpeg detection, first-frame fallback for short clips, bounded processing and badge fallback on failures.
+- Shared image/video cache and `--no-video-thumbnails` to disable only video extraction.
+- Windows 11 setup guide, updated CLI help and documentation, plus FFmpeg integration tests and CI jobs.
 - Optional Sharp image processing, detected automatically when installed beside the script.
 - On-demand WebP thumbnails for covers and grids, with original-quality full-screen images.
 - A 512 MiB user cache with automatic eviction and invalidation when originals change.

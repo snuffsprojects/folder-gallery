@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: Node ${{ matrix.node }} / Sharp ${{ matrix.sharp }}
+    name: Node ${{ matrix.node }} / Sharp ${{ matrix.sharp }} / FFmpeg ${{ matrix.ffmpeg }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -18,11 +18,17 @@ jobs:
       matrix:
         node: [18, 22, 24]
         sharp: [false]
+        ffmpeg: [false]
         include:
           - node: 22
             sharp: true
+            ffmpeg: true
           - node: 24
             sharp: true
+            ffmpeg: true
+          - node: 22
+            sharp: false
+            ffmpeg: true
     steps:
       - uses: actions/checkout@v7
         with:
@@ -34,9 +40,13 @@ jobs:
       - name: Install optional image processor
         if: matrix.sharp
         run: npm install --no-save --package-lock=false sharp
+      - name: Install optional video processor
+        if: matrix.ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Check JavaScript syntax
         run: npm run check
       - name: Run tests
         run: npm test
         env:
           FOLDER_GALLERY_TEST_SHARP: ${{ matrix.sharp && '1' || '' }}
+          FOLDER_GALLERY_TEST_FFMPEG: ${{ matrix.ffmpeg && '1' || '' }}

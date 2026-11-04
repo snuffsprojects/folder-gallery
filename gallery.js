@@ -7,6 +7,7 @@ const fsp = fs.promises;
 const path = require('node:path');
 const os = require('node:os');
 const { createHash, randomUUID } = require('node:crypto');
+const execFile = require('node:util').promisify(require('node:child_process').execFile);
 const localAddresses = () => Object.values(os.networkInterfaces()).flat().filter(item => item && item.family === 'IPv4' && !item.internal).map(item => item.address);
 const PAGE_SIZE = 30;
 const TYPES = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.avif': 'image/avif', '.bmp': 'image/bmp', '.webm': 'video/webm' };
@@ -84,6 +85,28 @@ function loadSharp() {
   try { return require('sharp'); } catch { return null; }
 }
 
+async function findFFmpeg() {
+  try {
+    await execFile('ffmpeg', ['-version'], { timeout: 3000, maxBuffer: 64 * 1024, windowsHide: true });
+    return 'ffmpeg';
+  } catch { return null; }
+}
+
+async function extractVideoFrame(file, command = 'ffmpeg') {
+  // Seek near the start; short clips may only have a frame at time zero.
+  for (const seek of ['1', '0']) {
+    const { stdout } = await execFile(command, [
+      '-hide_banner', '-loglevel', 'error', '-nostdin', '-threads', '1', '-filter_threads', '1',
+      '-protocol_whitelist', 'file,pipe', '-ss', seek, '-f', 'matroska', '-i', file,
+      '-map', '0:v:0', '-frames:v', '1', '-an', '-sn', '-dn',
+      '-vf', "scale=w='min(640,iw)':h='min(640,ih)':force_original_aspect_ratio=decrease,setsar=1",
+      '-c:v', 'libwebp', '-quality', '75', '-threads', '1', '-f', 'image2pipe', 'pipe:1'
+    ], { encoding: 'buffer', timeout: 10000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+    if (stdout.length) return stdout;
+  }
+  throw new Error('No video frame available.');
+}
+
 function thumbnailCacheDirectory() {
   const base = process.platform === 'win32' ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
     : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Caches')
@@ -91,9 +114,10 @@ function thumbnailCacheDirectory() {
   return path.join(base, 'folder-gallery', 'thumbnails-v1');
 }
 
-// Only previews use Sharp. Cache/decoder errors are handled by the media route,
-// which serves the original instead. No media files or folders are written to.
-function createThumbnailCache(sharp, { cacheDir = thumbnailCacheDirectory(), maxBytes = 512 * 1024 * 1024 } = {}) {
+// Only previews use Sharp/FFmpeg. Cache/decoder errors are handled by the media route,
+// which serves original images or lets videos retain their badge tiles.
+// No media files or folders are written to.
+function createThumbnailCache(sharp, { cacheDir = thumbnailCacheDirectory(), maxBytes = 512 * 1024 * 1024, videoRenderer = null } = {}) {
   const pending = new Map(), waiting = [];
   let active = 0, entries, totalBytes = 0, cacheWork = Promise.resolve();
   function withCache(operation) {
@@ -131,7 +155,10 @@ function createThumbnailCache(sharp, { cacheDir = thumbnailCacheDirectory(), max
     finally { if (waiting.length) waiting.shift()(); else active--; }
   }
   return function thumbnail(file, stat) {
-    const key = createHash('sha256').update(JSON.stringify([file, stat.size, stat.mtimeMs, stat.ctimeMs])).digest('hex');
+    const isVideo = imageType(file) === 'webm';
+    const identity = [file, stat.size, stat.mtimeMs, stat.ctimeMs];
+    if (isVideo) identity.push('video-v1');
+    const key = createHash('sha256').update(JSON.stringify(identity)).digest('hex');
     if (pending.has(key)) return pending.get(key);
     // Bound the backlog as well as the number of simultaneous decoders.
     if (pending.size >= 32) return Promise.reject(new Error('Thumbnail queue full.'));
@@ -153,8 +180,9 @@ function createThumbnailCache(sharp, { cacheDir = thumbnailCacheDirectory(), max
         }
       });
       if (hit) return { buffer: hit, etag: `"thumb-v1-${key}"` };
-      const buffer = await sharp(file, { limitInputPixels: 40_000_000, animated: false })
-        .rotate().resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true }).webp({ quality: 75 }).toBuffer();
+      const buffer = isVideo ? await videoRenderer(file)
+        : await sharp(file, { limitInputPixels: 40_000_000, animated: false })
+          .rotate().resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true }).webp({ quality: 75 }).toBuffer();
       await withCache(async () => {
         const temporary = path.join(cacheDir, '.' + randomUUID() + '.tmp');
         try {
@@ -172,13 +200,18 @@ function createThumbnailCache(sharp, { cacheDir = thumbnailCacheDirectory(), max
   };
 }
 
-async function createGallery(root, { host = '127.0.0.1', thumbnails = true, sharp = thumbnails ? loadSharp() : null, cacheDir, cacheBytes } = {}) {
+async function createGallery(root, { host = '127.0.0.1', thumbnails = true, videoThumbnails = true, sharp = thumbnails ? loadSharp() : null, ffmpeg, cacheDir, cacheBytes } = {}) {
   const networkMode = host !== '127.0.0.1';
   const allowedHosts = new Set(['localhost', '127.0.0.1', '[::1]', ...(networkMode ? localAddresses() : [])]);
   if (networkMode && host !== '0.0.0.0') allowedHosts.add(host);
   root = await fsp.realpath(root);
   if (!(await fsp.stat(root)).isDirectory()) throw new Error('The gallery root must be a folder.');
-  const thumbnail = thumbnails && sharp ? createThumbnailCache(sharp, { cacheDir, maxBytes: cacheBytes }) : null;
+  if (!thumbnails || !videoThumbnails) ffmpeg = null;
+  else if (ffmpeg === undefined) ffmpeg = await findFFmpeg();
+  const imagePreviews = Boolean(thumbnails && sharp), videoPreviews = Boolean(ffmpeg);
+  const thumbnail = imagePreviews || videoPreviews ? createThumbnailCache(sharp, {
+    cacheDir, maxBytes: cacheBytes, videoRenderer: ffmpeg ? file => extractVideoFrame(file, ffmpeg) : null
+  }) : null;
   let index;
   let scanning;
   async function getIndex(refresh = false) {
@@ -207,7 +240,7 @@ async function createGallery(root, { host = '127.0.0.1', thumbnails = true, shar
         const data = await getIndex(url.searchParams.get('refresh') === '1');
         const formats = selectedFormats(url);
         const albums = [...data.albums.values()].map(album => filterAlbum(album, formats, sort)).filter(album => album.count);
-        return sendJson(req, res, 200, { root: path.basename(root), thumbnails: Boolean(thumbnail), totalImages: [...data.albums.values()].reduce((sum, album) => sum + album.count, 0), albums: albums.sort((a, b) => compareItems(a, b, sort, 'folder')).map(({ images, ...album }) => album), warnings: data.warnings });
+        return sendJson(req, res, 200, { root: path.basename(root), thumbnails: imagePreviews, videoThumbnails: videoPreviews, totalImages: [...data.albums.values()].reduce((sum, album) => sum + album.count, 0), albums: albums.sort((a, b) => compareItems(a, b, sort, 'folder')).map(({ images, ...album }) => album), warnings: data.warnings });
       }
       if (url.pathname === '/api/gallery') {
         const data = await getIndex();
@@ -233,15 +266,20 @@ async function createGallery(root, { host = '127.0.0.1', thumbnails = true, shar
           stat = await fsp.stat(file);
           if (!stat.isFile()) throw new Error('Not a file');
         } catch { return sendJson(req, res, 404, { error: 'Image not found.' }); }
-        if (thumbnail && url.searchParams.get('thumbnail') === '1' && !url.searchParams.has('download') && imageType(file) !== 'webm') {
+        if (url.searchParams.get('thumbnail') === '1' && !url.searchParams.has('download')) {
+          const isVideo = imageType(candidate) === 'webm';
           let preview;
-          try { preview = await thumbnail(file, stat); } catch { /* Unsupported image or unavailable cache: serve the original. */ }
+          if (isVideo ? videoPreviews : imagePreviews) {
+            try { preview = await thumbnail(file, stat); } catch { /* Use original images or video badges when processing fails. */ }
+          }
           if (preview) {
             const headers = { 'Content-Type': 'image/webp', 'Content-Length': preview.buffer.length, ETag: preview.etag, 'Cache-Control': 'private, max-age=0, must-revalidate' };
             if (req.headers['if-none-match'] === preview.etag) { res.writeHead(304, { ETag: preview.etag, 'Cache-Control': headers['Cache-Control'] }); return res.end(); }
             res.writeHead(200, headers);
             return res.end(req.method === 'HEAD' ? undefined : preview.buffer);
           }
+          // Never send the original video to an image element as a fallback.
+          if (isVideo) return sendJson(req, res, 404, { error: 'Video preview unavailable.' });
         }
         const etag = `"${stat.size}-${stat.mtimeMs}"`;
         if (req.headers['if-none-match'] === etag) { res.writeHead(304, { ETag: etag }); return res.end(); }
@@ -268,7 +306,8 @@ async function createGallery(root, { host = '127.0.0.1', thumbnails = true, shar
       return sendJson(req, res, 500, { error: 'Could not read the gallery. Check the terminal for details.' });
     }
   });
-  server.thumbnailsEnabled = Boolean(thumbnail);
+  server.thumbnailsEnabled = imagePreviews;
+  server.videoThumbnailsEnabled = videoPreviews;
   return server;
 }
 
@@ -278,7 +317,7 @@ function browserApp() {
   const home = $('#home'), viewer = $('#viewer'), lightbox = $('#lightbox'), grid = $('#photos'), photo = $('#photo');
   let albums = [], current = null, pageData = null, page = 1, selected = 0, requestId = 0;
   const formats = ['jpg', 'png', 'gif', 'webp', 'avif', 'bmp', 'webm'];
-  let enabledTypes = new Set(formats), totalImages = 0, albumsRequest = 0, thumbnailsEnabled = false;
+  let enabledTypes = new Set(formats), totalImages = 0, albumsRequest = 0, thumbnailsEnabled = false, videoThumbnailsEnabled = false;
   let sortOrder = 'name-asc', selectedItem = null;
   const sortQuery = () => sortOrder === 'name-asc' ? '' : '&sort=' + encodeURIComponent(sortOrder);
   const typeQuery = () => enabledTypes.size === formats.length ? '' : '&types=' + encodeURIComponent([...enabledTypes].join(','));
@@ -290,6 +329,12 @@ function browserApp() {
   function preview(item, cover = false) {
     if ((cover ? item.coverType : item.type) === 'video') {
       const tile = node('span', 'video-preview'); tile.append(node('span', 'play-symbol', '▶'), node('span', 'video-badge', 'WEBM'));
+      if (videoThumbnailsEnabled) {
+        const img = node('img'); img.loading = 'lazy'; img.decoding = 'async'; img.alt = cover ? '' : item.name;
+        img.src = (cover ? item.cover : item.url) + '?thumbnail=1';
+        img.addEventListener('error', () => img.remove());
+        tile.prepend(img); tile.classList.add('has-preview');
+      }
       return tile;
     }
     const original = cover ? item.cover : item.url;
@@ -361,6 +406,7 @@ function browserApp() {
       const data = await json(`/api/albums?refresh=${rescan ? 1 : 0}${typeQuery()}${sortQuery()}`);
       if (token !== albumsRequest) return;
       thumbnailsEnabled = Boolean(data.thumbnails);
+      videoThumbnailsEnabled = Boolean(data.videoThumbnails);
       albums = data.albums; totalImages = data.totalImages ?? albums.reduce((sum, album) => sum + album.count, 0);
       $('#root-name').textContent = data.root;
       $('#totals').textContent = `${albums.length} galleries · ${albums.reduce((sum, album) => sum + album.count, 0).toLocaleString()} files · ${bytes(albums.reduce((sum, album) => sum + album.bytes, 0))}`;
@@ -509,6 +555,7 @@ const HTML = String.raw`<!doctype html>
 .format-filter{border:0;padding:0;margin:22px 0 0;min-width:0}.format-filter legend{font-size:12px;font-weight:650;color:var(--muted);margin-bottom:10px}.type-filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.type-toggle{display:flex;align-items:center;gap:7px;min-height:38px;padding:6px 12px;background:var(--panel);border:1px solid var(--line);border-radius:4px;cursor:pointer;font-size:12px}.type-toggle:has(input:checked){border-color:var(--accent);color:var(--accent)}.type-toggle input{accent-color:var(--accent);margin:0}.filter-action{background:transparent;border:0;color:var(--muted);padding:8px;font-size:12px;text-decoration:underline}.filter-action:hover{color:var(--text)}.viewer-filter{margin:20px clamp(16px,4vw,52px) 0}.viewer-empty{padding:24px clamp(16px,4vw,52px)}
 .sort-control{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin-top:20px}.sort-control select{min-height:42px;max-width:100%;padding:0 12px;background:var(--panel);border:1px solid var(--line);border-radius:4px;color:var(--text);font:inherit}.sort-control select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.viewer-sort{margin:0 clamp(16px,4vw,52px)}.info-toggle{position:fixed;top:18px;left:18px;z-index:5}.image-info{position:fixed;z-index:5;right:20px;bottom:64px;width:min(330px,calc(100% - 40px));max-height:calc(100dvh - 150px);overflow:auto;padding:20px;background:#12161cf5;border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 30px #0009}.image-info h3{margin:0 0 16px;font-size:16px}.image-info dl{margin:0;display:grid;gap:4px}.image-info dt{color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase}.image-info dd{margin:0 0 10px;font-size:13px;overflow-wrap:anywhere;user-select:text}@media(max-width:650px){.info-toggle{top:70px;left:12px}.image-info{max-height:40dvh;right:16px;bottom:64px;width:calc(100% - 32px)}}
 .video-preview{position:relative;display:grid;place-content:center;gap:12px;min-height:180px;width:100%;height:100%;background:linear-gradient(145deg,#171e29,#0b0f14);text-align:center}.play-symbol{font-size:40px;color:var(--accent)}.video-badge{font-size:11px;letter-spacing:.16em;color:var(--muted)}#video{max-width:100%;max-height:calc(100dvh - 180px);width:auto}.stage.video-stage{cursor:default;touch-action:auto;align-content:center;gap:12px}.download-video{font-size:13px;color:var(--accent)}
+.video-preview.has-preview{aspect-ratio:4/3;overflow:hidden}.video-preview>img{position:absolute;inset:0;width:100%;height:100%;min-height:0;object-fit:cover}.video-preview.has-preview::after{content:'';position:absolute;inset:0;background:#0004}.video-preview>.play-symbol,.video-preview>.video-badge{position:relative;z-index:1;text-shadow:0 2px 5px #000}.video-preview.has-preview>.play-symbol{color:white}.video-preview.has-preview>.video-badge{color:white}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <header><div class="brand"><span class="mark">FG</span>Folder Gallery</div><span class="local-label">LOCAL FILES · SIMPLE PLEASURES</span></header>
@@ -522,10 +569,10 @@ const HTML = String.raw`<!doctype html>
 
 async function main(args) {
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Folder Gallery\n\nUsage: node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails]\n\nDefaults to the folder containing gallery.js. Opens a read-only local web server.\nSupports JPG, PNG, GIF, WebP, AVIF, BMP and WebM. For LAN access, use --host 0.0.0.0.\nOptional Sharp enables cached image previews; --no-thumbnails disables them.\nInstall beside gallery.js: npm install --no-save --package-lock=false sharp\nPress Ctrl+C to stop.');
+    console.log('Folder Gallery\n\nUsage: node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails] [--no-video-thumbnails]\n\nDefaults to the folder containing gallery.js. Opens a read-only local web server.\nSupports JPG, PNG, GIF, WebP, AVIF, BMP and WebM. For LAN access, use --host 0.0.0.0.\nOptional Sharp enables image previews; optional FFmpeg on PATH enables WebM previews.\n--no-thumbnails disables all previews; --no-video-thumbnails disables video previews only.\nInstall Sharp beside gallery.js: npm install --no-save --package-lock=false sharp\nInstall FFmpeg on Windows: winget install --id Gyan.FFmpeg --exact\nPress Ctrl+C to stop.');
     return;
   }
-  let root = __dirname, port = 4180, host = '127.0.0.1', hasRoot = false, thumbnails = true;
+  let root = __dirname, port = 4180, host = '127.0.0.1', hasRoot = false, thumbnails = true, videoThumbnails = true;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--port') {
       const value = args[++i];
@@ -535,17 +582,20 @@ async function main(args) {
       host = args[++i];
       if (!host || !['127.0.0.1', '0.0.0.0', ...localAddresses()].includes(host)) throw new Error('Use --host 127.0.0.1, 0.0.0.0, or this computer’s local IPv4 address.');
     } else if (args[i] === '--no-thumbnails') thumbnails = false;
+    else if (args[i] === '--no-video-thumbnails') videoThumbnails = false;
     else if (args[i].startsWith('-')) throw new Error(`Unknown option: ${args[i]}. Run with --help.`);
     else if (!hasRoot) { root = path.resolve(args[i]); hasRoot = true; }
     else throw new Error('Supply only one gallery folder. Run with --help.');
   }
-  const server = await createGallery(root, { host, thumbnails });
+  const server = await createGallery(root, { host, thumbnails, videoThumbnails });
   server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `Port ${port} is in use. Try --port ${port + 1}.` : error.message); process.exitCode = 1; });
   server.listen(port, host, () => {
     const networkUrls = host === '127.0.0.1' ? '' : '\nNetwork: ' + (host === '0.0.0.0' ? localAddresses() : [host]).map(address => `http://${address}:${server.address().port}`).join('\n         ');
-    const thumbnailStatus = server.thumbnailsEnabled ? `Thumbnail acceleration enabled\nCache: ${thumbnailCacheDirectory()} (512 MiB limit)` : thumbnails ? 'Thumbnails: off (optional Sharp not available)' : 'Thumbnails: disabled';
+    const imageStatus = server.thumbnailsEnabled ? 'Thumbnail acceleration enabled (Sharp images)' : thumbnails ? 'Image thumbnails: off (optional Sharp not available)' : 'Thumbnails: disabled';
+    const videoStatus = server.videoThumbnailsEnabled ? 'WebM previews enabled (FFmpeg)' : thumbnails && videoThumbnails ? 'WebM previews: off (optional FFmpeg not available)' : 'WebM previews: disabled';
+    const thumbnailStatus = imageStatus + '\n' + videoStatus + (server.thumbnailsEnabled || server.videoThumbnailsEnabled ? `\nCache: ${thumbnailCacheDirectory()} (512 MiB limit)` : '');
     console.log(`\nFolder Gallery\nFolder: ${path.resolve(root)}\nOpen:   http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${server.address().port}${networkUrls}\n${thumbnailStatus}\n\nPress Ctrl+C to stop. Your original files are never modified.\n`);
   });
 }
 if (require.main === module) main(process.argv.slice(2)).catch(error => { console.error('Folder Gallery: ' + error.message); process.exitCode = 1; });
-module.exports = { createGallery, scanFolders, parseRange, createThumbnailCache, thumbnailCacheDirectory, HTML };
+module.exports = { createGallery, scanFolders, parseRange, createThumbnailCache, thumbnailCacheDirectory, extractVideoFrame, findFFmpeg, HTML };

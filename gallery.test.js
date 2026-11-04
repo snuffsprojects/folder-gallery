@@ -168,10 +168,12 @@ test('browser search, page controls, cross-page viewing, zoom and close', async 
     return {
       pauses: 0, loads: 0, pause() { this.pauses++; }, load() { this.loads++; }, getAttribute(key) { return this[key] ?? null; },
       tagName: tag, value: '', children: [], handlers: {}, hidden: false, open: false, scrollTop: 0, style: {},
-      classList: { toggle() {} },
+      classList: { toggle() {}, add() {} },
       setAttribute(key, value) { this[key] = value; },
       removeAttribute(key) { delete this[key]; },
       append(...items) { this.children.push(...items); },
+      prepend(...items) { this.children.unshift(...items); },
+      remove() { this.removed = true; },
       replaceChildren(...items) { this.children = items; },
       replaceWith(replacement) { this.replacement = replacement; },
       addEventListener(type, callback) { this.handlers[type] = callback; },
@@ -184,7 +186,7 @@ test('browser search, page controls, cross-page viewing, zoom and close', async 
   const controls = [element('nav'), element('nav')];
   const album = { id: 'Trips', name: 'Trips', folder: 'Trips', count: 65, bytes: 195, cover: '/media/1.jpg' };
   const requests = [];
-  let videoMode = false;
+  let videoMode = false, videoPreviews = false;
   const document = { querySelector: $, querySelectorAll: () => controls, createElement: element, addEventListener(type, callback) { this[type] = callback; } };
   const context = vm.createContext({
     document, window: { scrollY: 0, addEventListener() {}, scrollTo() {} },
@@ -195,7 +197,7 @@ test('browser search, page controls, cross-page viewing, zoom and close', async 
       const page = Number(parsed.searchParams.get('page') || 1);
       const matches = !parsed.searchParams.has('types') || parsed.searchParams.get('types').split(',').includes('jpg');
       const data = parsed.pathname === '/api/albums'
-        ? { root: 'Photos', thumbnails: true, albums: matches ? [album] : [], warnings: [], totalImages: 65 }
+        ? { root: 'Photos', thumbnails: true, videoThumbnails: videoPreviews, albums: matches ? [album] : [], warnings: [], totalImages: 65 }
         : { ...album, count: matches ? 65 : 0, page, pages: matches ? 3 : 1, pageSize: 30, images: matches ? Array.from({ length: page === 3 ? 5 : 30 }, (_, i) => ({ type: videoMode && (page - 1) * 30 + i + 1 === 31 ? 'video' : 'image', name: videoMode && (page - 1) * 30 + i + 1 === 31 ? 'clip.webm' : `photo${(page - 1) * 30 + i + 1}.jpg`, bytes: 3, modifiedAt: '2026-01-02T03:04:05.000Z', url: videoMode && (page - 1) * 30 + i + 1 === 31 ? '/media/clip.webm' : `/media/${(page - 1) * 30 + i + 1}.jpg` })) : [] };
       return { ok: true, json: async () => data };
     }
@@ -292,6 +294,18 @@ test('browser search, page controls, cross-page viewing, zoom and close', async 
   assert.equal(video.src, '/media/clip.webm');
   $('#close-image').handlers.click();
   assert.equal(video.src, undefined); assert.ok(video.loads > 0);
+  videoPreviews = true;
+  $('#refresh').handlers.click(); await settle();
+  // Reload a gallery page after capability detection: videos get an image,
+  // never a second video player. Broken thumbnails fall back to the badge.
+  controls[0].children[0].handlers.click(); await settle();
+  controls[0].children[2].handlers.click(); await settle();
+  const videoTile = $('#photos').children[0].children[0];
+  assert.equal(videoTile.children[0].tagName, 'img');
+  assert.equal(videoTile.children[0].src, '/media/clip.webm?thumbnail=1');
+  videoTile.children[0].handlers.error();
+  assert.equal(videoTile.children[0].removed, true);
+  assert.equal(videoTile.children[1].textContent, '▶');
   $('#close-album').handlers.click(); assert.equal($('#viewer').open, false);
   assert.ok(requests.includes('/api/gallery?id=Trips&page=3'));
 });

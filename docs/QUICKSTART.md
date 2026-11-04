@@ -2,6 +2,8 @@
 
 ## 1. Install Node.js
 
+Windows 11 users can also follow the complete [Windows guide](WINDOWS.md).
+
 Install Node.js from [nodejs.org](https://nodejs.org/en/download).
 Node.js 22 or newer is recommended. Then open a new terminal and check:
 
@@ -118,8 +120,31 @@ full quality, and your originals are never changed. If Sharp is unavailable or
 cannot process a file, the gallery uses the original instead.
 
 Keep the installed `node_modules` folder beside `gallery.js`. If you move just the
-script, install Sharp again in its new folder. To temporarily disable thumbnail
-generation, run `node gallery.js --no-thumbnails`.
+script, install Sharp again in its new folder. To temporarily disable all
+thumbnail generation, run `node gallery.js --no-thumbnails`.
 
 See [Faster previews](../README.md#faster-previews-optional) for cache locations,
 supported behaviour and troubleshooting. This upgrade is entirely optional.
+
+## Optional: WebM video previews
+
+Install FFmpeg to show a still frame on each WebM tile. This works independently
+of Sharp. On Windows 11, run in PowerShell or Windows Terminal:
+
+```powershell
+winget install --id Gyan.FFmpeg --exact
+```
+
+Close and reopen the terminal, then check `ffmpeg -version`. Start the latest
+`gallery.js` as usual with `node .\gallery.js`. The terminal should show
+**WebM previews enabled (FFmpeg)**.
+
+Frames are generated only as requested and share the image thumbnail cache.
+Original videos are untouched. If FFmpeg is absent or cannot extract a frame,
+the gallery keeps the existing play-badge tile and still lets you open the clip.
+Use `node gallery.js --no-video-thumbnails` to disable video previews while keeping
+image thumbnails, or `--no-thumbnails` to disable both.
+
+See the [Windows guide](WINDOWS.md) for manual installation, or
+[WebM previews](../README.md#webm-previews-optional) for Linux/macOS installation
+and full details.

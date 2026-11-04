@@ -21,7 +21,7 @@ function processor(render) {
 }
 
 async function serve(t, root, options) {
-  const server = await createGallery(root, options);
+  const server = await createGallery(root, { ffmpeg: null, ...options });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   return `http://127.0.0.1:${server.address().port}`;
@@ -99,7 +99,8 @@ test('preview HTTP requests preserve originals, validators, paths and video beha
   assert.equal(head.headers.get('content-length'), '7'); assert.equal(await head.text(), '');
   const download = await fetch(url + '?thumbnail=1&download=1');
   assert.equal(await download.text(), 'original-image'); assert.equal(download.headers.get('content-disposition'), 'attachment');
-  const video = await fetch(base + '/media/clip.webm?thumbnail=1', { headers: { Range: 'bytes=2-5' } });
+  assert.equal((await fetch(base + '/media/clip.webm?thumbnail=1')).status, 404);
+  const video = await fetch(base + '/media/clip.webm', { headers: { Range: 'bytes=2-5' } });
   assert.equal(video.status, 206); assert.equal(await video.text(), '2345'); assert.equal(calls, 1);
   for (const name of ['.hidden.jpg', 'escape.jpg', '../outside.jpg']) {
     assert.equal((await fetch(base + '/media/' + encodeURIComponent(name) + '?thumbnail=1')).status, 404);
@@ -135,7 +136,7 @@ test('a standalone copy starts normally when Sharp is not installed beside it', 
   const script = path.join(root, 'gallery.js');
   await fs.copyFile(path.join(__dirname, 'gallery.js'), script);
   const standalone = require(script);
-  const server = await standalone.createGallery(root, { cacheDir });
+  const server = await standalone.createGallery(root, { cacheDir, ffmpeg: null });
   assert.equal(server.thumbnailsEnabled, false);
   await assert.rejects(fs.stat(cacheDir), { code: 'ENOENT' });
 });

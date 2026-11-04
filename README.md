@@ -3,11 +3,12 @@
 A standalone, read-only image and WebM gallery. Copy **gallery.js** into any folder of
 images and videos and run it. The interface, styles and server are all inside that one file;
 no npm packages, installation scripts or generated gallery files are needed.
-An optional image processor can speed up previews (see below).
+Optional Sharp speeds up image previews; optional FFmpeg adds still-frame WebM previews.
 Requires Node.js 18 or newer (Node.js 22+ recommended). Works on Linux, Windows
 and macOS with Node installed.
 
 New to running scripts? Follow the [step-by-step setup guide](docs/QUICKSTART.md).
+For Windows 11, see the [Windows installation guide](docs/WINDOWS.md), including both optional upgrades.
 
 ## Get the script
 
@@ -125,7 +126,7 @@ needed. Installation requires internet access; everyday use works offline.
   once. The first visit may be slower while they are generated; later visits reuse them.
 - Full-screen viewing, zooming and file information use the original images.
 - Animated images use a still frame for their thumbnails. Animation remains
-  available when opening the original. WebM tiles stay as static play badges.
+  available when opening the original. WebM frames use optional FFmpeg instead (see below).
 - Unsupported images (including BMP on typical Sharp builds), images over
   40 megapixels, processing errors and cache failures fall back to the original.
 - Sharp is detected automatically at startup. If it is absent or cannot load,
@@ -160,11 +161,60 @@ one installed copy of the script and pass any photo folder as its argument:
 node "/path/to/gallery.js" "/path/to/photos"
 ```
 
+## WebM previews (optional)
+
+Install [FFmpeg](https://ffmpeg.org/download.html) to replace WebM badge tiles with
+still-frame previews. **Sharp is not required for video previews.** Both upgrades
+are independent, and the gallery still works with neither installed.
+
+On **Windows 11**, open PowerShell or Windows Terminal and run:
+
+```powershell
+winget install --id Gyan.FFmpeg --exact
+```
+
+Close and reopen your terminal after installation, then check:
+
+```powershell
+ffmpeg -version
+```
+
+Start the latest `gallery.js` normally. The terminal should show
+**WebM previews enabled (FFmpeg)**. See the [Windows guide](docs/WINDOWS.md) for
+manual installation and troubleshooting. The WinGet package is an x64 build.
+
+On **Ubuntu/Debian**, install with `sudo apt update` followed by
+`sudo apt install ffmpeg`. On **macOS**, if you use Homebrew, run
+`brew install ffmpeg`. Alternatively, use a build linked from the FFmpeg download
+page. The executable must be available as `ffmpeg` on your system's `PATH`.
+
+- Album covers and video tiles show a still frame with a play badge; no background
+  video players are created and the browser only downloads the preview image.
+- FFmpeg extracts a frame around one second into the clip, falling back to the
+  first frame for very short clips. It produces a WebP image up to 640 × 640 pixels.
+- Video and image previews share the 512 MiB user cache and the limit of two
+  processing jobs at once. Changed clips automatically get new previews.
+- Missing FFmpeg, unsupported codecs, broken clips, processing timeouts or cache
+  errors leave the normal play-badge tile. Video playback still works as before.
+- FFmpeg is detected at startup; restart the script after installing it. The
+  build needs WebM decoding and the `libwebp` encoder, as included in common full builds.
+- The original videos are never modified or transcoded for playback. Creating a
+  still frame does not add browser support for an unsupported video codec.
+
+Disable just video previews while keeping Sharp image thumbnails:
+
+```bash
+node gallery.js --no-video-thumbnails
+```
+
+Use `--no-thumbnails` to disable both optional processors and all cache access.
+
 ## WebM playback
 
 WebM is included by default and has its own **WEBM** filter. Video-only folders
-also become galleries. Grid and cover previews use static play-badge tiles;
-there are no background video players or video downloads for those tiles.
+also become galleries. Grid and cover previews use cached still frames when
+FFmpeg is available, or static play-badge tiles otherwise. There are no background
+video players or original-video downloads for those tiles.
 
 Selecting a clip opens one player with native controls. It starts paused and
 muted; press Play to begin and use the volume control to unmute. Moving to another
@@ -175,8 +225,8 @@ behaviour. Seeking uses HTTP byte-range responses.
 
 The Info panel includes video dimensions and duration once metadata loads. An
 original-WebM download link is available if the browser cannot decode the clip.
-No FFmpeg or other dependencies are required; this version does not extract
-thumbnail frames or transcode videos.
+Playback needs no FFmpeg or other dependencies. Only the optional still-frame
+previews use FFmpeg; playback always serves the existing WebM file.
 
 ## Access from another computer
 
@@ -208,7 +258,7 @@ If a network interface/IP changes while running, restart the script.
 ## Command-line options
 
 ```text
-node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails]
+node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails] [--no-video-thumbnails]
 ```
 
 | Option | Default | Purpose |
@@ -216,7 +266,8 @@ node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails]
 | `folder` | Folder containing `gallery.js` | Media folder to browse; quote paths containing spaces |
 | `--port` | `4180` | TCP port; use another if the default is busy |
 | `--host` | `127.0.0.1` | Local-only; use `0.0.0.0` or a local IPv4 address for network access |
-| `--no-thumbnails` | Auto-detect Sharp | Disable thumbnail processing and cache access |
+| `--no-thumbnails` | Auto-detect Sharp and FFmpeg | Disable all thumbnail processing and cache access |
+| `--no-video-thumbnails` | Auto-detect FFmpeg | Disable video previews while allowing image thumbnails |
 | `--help` | — | Print usage instructions |
 
 ## Troubleshooting
@@ -230,13 +281,15 @@ node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails]
 | WebM will not play | Your browser may not support the clip's codec; use Download original WebM |
 | Large pictures load slowly | Install optional Sharp for smaller previews; full-screen viewing still loads the original |
 | Sharp is installed but thumbnails are off | Restart the script, use Node.js 22+, and install Sharp in the folder containing `gallery.js` |
+| FFmpeg is installed but WebM previews are off | Reopen the terminal, check `ffmpeg -version`, then restart the script; remove `--no-thumbnails` or `--no-video-thumbnails` if present |
+| A video still shows a play-badge tile | Extraction may have failed; use an FFmpeg build with WebM decoding and `libwebp`, and check the clip is readable; playback remains available |
 | Changes are not visible | Choose Refresh folders for media changes; restart the script and refresh the browser after a script update |
 
 ## Validation
 
 ```bash
 node --check gallery.js
-node --test gallery.test.js thumbnail.test.js
+node --test gallery.test.js thumbnail.test.js video.test.js
 ```
 
 Automated checks cover folder discovery, nested-folder separation, sorting,
@@ -247,13 +300,18 @@ need a visual check.
 
 
 The GitHub Actions workflow runs syntax checks and tests without dependencies on
-Node.js 18, 22 and 24, plus actual Sharp conversion tests on Node.js 22 and 24.
+Node.js 18, 22 and 24, plus actual Sharp and FFmpeg conversion tests on Node.js 22
+and 24, including an FFmpeg-only job without Sharp.
 Thumbnail tests cover cache reuse, invalidation, eviction, processing limits,
 fallbacks, HTTP caching and access boundaries. On a local checkout you can also
 run `npm run check` and `npm test`. To include actual image conversion after
 installing Sharp, set `FOLDER_GALLERY_TEST_SHARP=1` when running the tests (on
 Linux/macOS: `FOLDER_GALLERY_TEST_SHARP=1 npm test`; PowerShell:
 `$env:FOLDER_GALLERY_TEST_SHARP='1'; npm test`).
+Set `FOLDER_GALLERY_TEST_FFMPEG=1` to include real video extraction tests with
+`ffmpeg` and `ffprobe` installed. Set both variables to test both upgrades together.
+Video tests cover short clips, unusual filenames, cached WebP output, invalidation,
+unavailable/disabled processing, access boundaries and unchanged byte-range playback.
 
 ## Contributing
 

@@ -3,6 +3,7 @@
 A standalone, read-only image and WebM gallery. Copy **gallery.js** into any folder of
 images and videos and run it. The interface, styles and server are all inside that one file;
 no npm packages, installation scripts or generated gallery files are needed.
+An optional image processor can speed up previews (see below).
 Requires Node.js 18 or newer (Node.js 22+ recommended). Works on Linux, Windows
 and macOS with Node installed.
 
@@ -60,7 +61,7 @@ Empty folders and folders containing only other folders do not create empty
 cards. Relative folder paths distinguish galleries with the same name.
 
 Supported: JPG/JPEG, PNG, GIF, WebP, AVIF, BMP and WebM. Browser format and codec
-support still applies. Hidden files/folders and symlinks are skipped. Files are
+support still applies. Hidden files/folders, symlinks and `node_modules` folders are skipped. Files are
 served without importing, renaming, deleting or uploading anything.
 
 ## Viewing
@@ -90,10 +91,74 @@ served without importing, renaming, deleting or uploading anything.
   is kept in memory, with no repeated background scans or files written to disk.
 
 Images are served directly from their existing locations. Pagination limits
-image requests and API responses to the selected page; full-size originals are
-used for the previews, with browser lazy loading. This first version does not
-create smaller thumbnails, so very large originals can still take time to load.
+image requests and API responses to the selected page, with browser lazy loading.
+By default previews use full-size originals, so very large originals can take time
+to load. Optional thumbnail acceleration reduces preview downloads (see below).
 It binds to loopback by default. Network access is opt-in (see below).
+
+## Faster previews (optional)
+
+The script works without installing anything. For large pictures or browsing over
+Wi-Fi, you can optionally install [Sharp](https://sharp.pixelplumbing.com/install/).
+Use **Node.js 22 or newer** for this option; Node.js 18 still works in the basic mode.
+Open a terminal in the folder containing **gallery.js** and run once:
+
+```bash
+npm install --no-save --package-lock=false sharp
+```
+
+Then start normally:
+
+```bash
+node gallery.js
+```
+
+The terminal prints **Thumbnail acceleration enabled** when Sharp loads. Most
+Node.js installers include npm; if `npm` is not recognised, install it using your
+Node.js installer or your Linux distribution's package manager. Sharp normally
+downloads ready-built binaries for supported systems; no separate image tool is
+needed. Installation requires internet access; everyday use works offline.
+
+- Album covers and image grids use WebP thumbnails up to **640 × 640 pixels**,
+  preserving aspect ratio, orientation and transparency without enlarging small images.
+- Thumbnails are created only as requested, with at most two images processed at
+  once. The first visit may be slower while they are generated; later visits reuse them.
+- Full-screen viewing, zooming and file information use the original images.
+- Animated images use a still frame for their thumbnails. Animation remains
+  available when opening the original. WebM tiles stay as static play badges.
+- Unsupported images (including BMP on typical Sharp builds), images over
+  40 megapixels, processing errors and cache failures fall back to the original.
+- Sharp is detected automatically at startup. If it is absent or cannot load,
+  the gallery works in basic mode. Nothing is installed automatically.
+
+The thumbnail cache is separate from your photo folders, shared by galleries run
+under your user account, and limited to **512 MiB**. Older thumbnails are removed
+as space is needed. Changed originals get new thumbnails automatically, without
+waiting for a folder rescan. Use **Refresh folders** to update the grid's file list
+and file information. You can delete the cache while the gallery is stopped; it
+will be rebuilt as needed. Cached previews remain until evicted or deleted, even
+if you remove their originals.
+
+| System | Default cache location |
+| --- | --- |
+| Linux | `~/.cache/folder-gallery/thumbnails-v1` (or inside `$XDG_CACHE_HOME` when set to an absolute path) |
+| macOS | `~/Library/Caches/folder-gallery/thumbnails-v1` |
+| Windows | `%LOCALAPPDATA%\folder-gallery\thumbnails-v1` |
+
+The terminal prints the cache location. Original media files are never modified.
+To disable acceleration, including all thumbnail cache access:
+
+```bash
+node gallery.js --no-thumbnails
+```
+
+Sharp is installed in `node_modules` beside the script. Keep that folder beside
+`gallery.js`, or install Sharp again if you move the script. Alternatively, keep
+one installed copy of the script and pass any photo folder as its argument:
+
+```bash
+node "/path/to/gallery.js" "/path/to/photos"
+```
 
 ## WebM playback
 
@@ -143,7 +208,7 @@ If a network interface/IP changes while running, restart the script.
 ## Command-line options
 
 ```text
-node gallery.js [folder] [--port 4180] [--host 127.0.0.1]
+node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails]
 ```
 
 | Option | Default | Purpose |
@@ -151,6 +216,7 @@ node gallery.js [folder] [--port 4180] [--host 127.0.0.1]
 | `folder` | Folder containing `gallery.js` | Media folder to browse; quote paths containing spaces |
 | `--port` | `4180` | TCP port; use another if the default is busy |
 | `--host` | `127.0.0.1` | Local-only; use `0.0.0.0` or a local IPv4 address for network access |
+| `--no-thumbnails` | Auto-detect Sharp | Disable thumbnail processing and cache access |
 | `--help` | — | Print usage instructions |
 
 ## Troubleshooting
@@ -162,14 +228,15 @@ node gallery.js [folder] [--port 4180] [--host 127.0.0.1]
 | Port already in use | Start with `--port 4181`, then use the printed address |
 | Another device cannot connect | Use `--host 0.0.0.0`, the correct Network URL, the same network and a local firewall rule allowing the port |
 | WebM will not play | Your browser may not support the clip's codec; use Download original WebM |
-| Large pictures load slowly | Previews use full-size originals; pagination and lazy loading limit requests but do not resize images |
+| Large pictures load slowly | Install optional Sharp for smaller previews; full-screen viewing still loads the original |
+| Sharp is installed but thumbnails are off | Restart the script, use Node.js 22+, and install Sharp in the folder containing `gallery.js` |
 | Changes are not visible | Choose Refresh folders for media changes; restart the script and refresh the browser after a script update |
 
 ## Validation
 
 ```bash
 node --check gallery.js
-node --test gallery.test.js
+node --test gallery.test.js thumbnail.test.js
 ```
 
 Automated checks cover folder discovery, nested-folder separation, sorting,
@@ -179,13 +246,18 @@ against a small simulated DOM, including sorting, information panels and video t
 need a visual check.
 
 
-The GitHub Actions workflow runs syntax checks and tests on Node.js 18, 22 and 24
-on Ubuntu. It does not install any npm packages. On a local checkout you can also
-run `npm run check` and `npm test`.
+The GitHub Actions workflow runs syntax checks and tests without dependencies on
+Node.js 18, 22 and 24, plus actual Sharp conversion tests on Node.js 22 and 24.
+Thumbnail tests cover cache reuse, invalidation, eviction, processing limits,
+fallbacks, HTTP caching and access boundaries. On a local checkout you can also
+run `npm run check` and `npm test`. To include actual image conversion after
+installing Sharp, set `FOLDER_GALLERY_TEST_SHARP=1` when running the tests (on
+Linux/macOS: `FOLDER_GALLERY_TEST_SHARP=1 npm test`; PowerShell:
+`$env:FOLDER_GALLERY_TEST_SHARP='1'; npm test`).
 
 ## Contributing
 
-Keep the distributable `gallery.js` self-contained and dependency-free. Changes
+Keep the distributable `gallery.js` self-contained and functional without dependencies. Changes
 to scanning, serving, filtering or controls should include relevant tests. Use
 synthetic fixtures rather than personal media, and run the validation commands
 before proposing a change. Describe the behaviour changed and any browser checks

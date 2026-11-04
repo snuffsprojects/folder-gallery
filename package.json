@@ -7,7 +7,7 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node gallery.js",
-    "check": "node --check gallery.js && node --check gallery.test.js",
-    "test": "node --test gallery.test.js"
+    "check": "node --check gallery.js && node --check gallery.test.js && node --check thumbnail.test.js",
+    "test": "node --test gallery.test.js thumbnail.test.js"
   }
 }

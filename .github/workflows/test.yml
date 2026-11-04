@@ -10,13 +10,19 @@ permissions:
 
 jobs:
   test:
-    name: Node ${{ matrix.node }}
+    name: Node ${{ matrix.node }} / Sharp ${{ matrix.sharp }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
         node: [18, 22, 24]
+        sharp: [false]
+        include:
+          - node: 22
+            sharp: true
+          - node: 24
+            sharp: true
     steps:
       - uses: actions/checkout@v7
         with:
@@ -25,7 +31,12 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
+      - name: Install optional image processor
+        if: matrix.sharp
+        run: npm install --no-save --package-lock=false sharp
       - name: Check JavaScript syntax
         run: npm run check
       - name: Run tests
         run: npm test
+        env:
+          FOLDER_GALLERY_TEST_SHARP: ${{ matrix.sharp && '1' || '' }}

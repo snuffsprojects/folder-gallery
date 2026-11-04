@@ -19,7 +19,7 @@ Save it as `gallery.js`, rather than `gallery.js.txt`.
 
 Alternatively, choose **Code → Download ZIP**, extract it, and find `gallery.js`.
 Only that one file is needed to run the gallery; the other files are instructions,
-tests and project metadata. There is no `npm install` step.
+tests and project metadata. No `npm install` step is required for normal use.
 
 Copy `gallery.js` into the folder containing your photos and subfolders. Keep
 this folder limited to media you want to browse or share.
@@ -100,3 +100,26 @@ for more network details.
 
 Updating the script does not alter your media. If your browser still shows the
 old interface, try a hard refresh (Ctrl+Shift+R, or Cmd+Shift+R on macOS).
+
+## Optional: faster image previews
+
+For large pictures or browsing over Wi-Fi, install the optional image processor
+once. Use Node.js 22 or newer, open a terminal in the folder containing
+`gallery.js`, and run:
+
+```text
+npm install --no-save --package-lock=false sharp
+```
+
+Then start with the same `node gallery.js` command. The terminal should show
+**Thumbnail acceleration enabled**. Small previews are generated as needed and
+cached in your user cache folder, with a 512 MiB limit. Full-screen images remain
+full quality, and your originals are never changed. If Sharp is unavailable or
+cannot process a file, the gallery uses the original instead.
+
+Keep the installed `node_modules` folder beside `gallery.js`. If you move just the
+script, install Sharp again in its new folder. To temporarily disable thumbnail
+generation, run `node gallery.js --no-thumbnails`.
+
+See [Faster previews](../README.md#faster-previews-optional) for cache locations,
+supported behaviour and troubleshooting. This upgrade is entirely optional.

@@ -16,6 +16,8 @@ test('each folder is separate, sorted naturally, with no hidden or symlinked fil
   const root = await fixture(t);
   await fs.mkdir(path.join(root, 'Trips/Nested'), { recursive: true });
   await fs.mkdir(path.join(root, '.private'));
+  await fs.mkdir(path.join(root, 'node_modules'));
+  await fs.writeFile(path.join(root, 'node_modules', 'dependency.png'), 'package-image');
   for (const file of ['root.jpg', 'Trips/10.jpg', 'Trips/2.jpg', 'Trips/Nested/snow.PNG', '.private/no.jpg', '.secret.jpg', 'notes.txt']) await fs.writeFile(path.join(root, file), 'abc');
   await fs.symlink(path.join(root, 'root.jpg'), path.join(root, 'linked.jpg'));
   const { albums, warnings } = await scanFolders(root);
@@ -44,7 +46,7 @@ test('read-only HTTP gallery pages, encoded filenames, cache, refresh and access
   await fs.symlink(path.join(outside, 'outside.jpg'), path.join(root, 'escape.jpg'));
   await fs.writeFile(path.join(root, '.secret.jpg'), 'hidden');
   await fs.writeFile(path.join(root, 'private.txt'), 'private');
-  const server = await createGallery(root);
+  const server = await createGallery(root, { thumbnails: false });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -171,7 +173,7 @@ test('browser search, page controls, cross-page viewing, zoom and close', async 
       removeAttribute(key) { delete this[key]; },
       append(...items) { this.children.push(...items); },
       replaceChildren(...items) { this.children = items; },
-      replaceWith() {},
+      replaceWith(replacement) { this.replacement = replacement; },
       addEventListener(type, callback) { this.handlers[type] = callback; },
       showModal() { this.open = true; },
       close() { if (this.open) { this.open = false; this.handlers.close?.(); } },
@@ -193,7 +195,7 @@ test('browser search, page controls, cross-page viewing, zoom and close', async 
       const page = Number(parsed.searchParams.get('page') || 1);
       const matches = !parsed.searchParams.has('types') || parsed.searchParams.get('types').split(',').includes('jpg');
       const data = parsed.pathname === '/api/albums'
-        ? { root: 'Photos', albums: matches ? [album] : [], warnings: [], totalImages: 65 }
+        ? { root: 'Photos', thumbnails: true, albums: matches ? [album] : [], warnings: [], totalImages: 65 }
         : { ...album, count: matches ? 65 : 0, page, pages: matches ? 3 : 1, pageSize: 30, images: matches ? Array.from({ length: page === 3 ? 5 : 30 }, (_, i) => ({ type: videoMode && (page - 1) * 30 + i + 1 === 31 ? 'video' : 'image', name: videoMode && (page - 1) * 30 + i + 1 === 31 ? 'clip.webm' : `photo${(page - 1) * 30 + i + 1}.jpg`, bytes: 3, modifiedAt: '2026-01-02T03:04:05.000Z', url: videoMode && (page - 1) * 30 + i + 1 === 31 ? '/media/clip.webm' : `/media/${(page - 1) * 30 + i + 1}.jpg` })) : [] };
       return { ok: true, json: async () => data };
     }
@@ -203,11 +205,18 @@ test('browser search, page controls, cross-page viewing, zoom and close', async 
   vm.runInContext(HTML.match(/<script>([\s\S]*?)<\/script>/)[1], context);
   await settle();
   assert.equal($('#albums').children.length, 1);
+  const cover = $('#albums').children[0].children[0].children[0];
+  assert.equal(cover.src, '/media/1.jpg?thumbnail=1');
+  cover.handlers.error();
+  assert.equal(cover.src, '/media/1.jpg');
+  cover.handlers.error();
+  assert.equal(cover.replacement.textContent, 'Preview unavailable');
   $('#search').value = 'missing'; $('#search').handlers.input();
   assert.equal($('#albums').children.length, 0); assert.equal($('#empty').hidden, false);
   $('#search').value = 'trips'; $('#search').handlers.input();
   $('#albums').children[0].handlers.click(); await settle();
   assert.equal($('#photos').children.length, 30);
+  assert.equal($('#photos').children[0].children[0].src, '/media/1.jpg?thumbnail=1');
   assert.equal(controls[0].children[0].disabled, true);
   controls[1].children[2].handlers.click(); await settle();
   assert.equal($('#photos').children.length, 30);
@@ -300,7 +309,7 @@ test('network mode accepts this computer’s IP while rejecting foreign hosts an
   const address = Object.values(require('node:os').networkInterfaces()).flat().find(item => item.family === 'IPv4' && !item.internal)?.address;
   if (!address) { t.skip('No network interface available'); return; }
   for (const networkMode of [false, true]) {
-    const server = await createGallery(root, { host: networkMode ? '0.0.0.0' : '127.0.0.1' });
+    const server = await createGallery(root, { host: networkMode ? '0.0.0.0' : '127.0.0.1', thumbnails: false });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
     const port = server.address().port;
@@ -316,7 +325,7 @@ test('network mode accepts this computer’s IP while rejecting foreign hosts an
 
 test('CLI network mode prints usable URLs and serves the chosen folder', async t => {
   const root = await fixture(t);
-  const child = require('node:child_process').spawn(process.execPath, [path.join(__dirname, 'gallery.js'), root, '--port', '0', '--host', '0.0.0.0'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = require('node:child_process').spawn(process.execPath, [path.join(__dirname, 'gallery.js'), root, '--port', '0', '--host', '0.0.0.0', '--no-thumbnails'], { stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => {
     if (child.exitCode === null) { const done = new Promise(resolve => child.once('exit', resolve)); child.kill(); await done; }
   });
@@ -328,6 +337,8 @@ test('CLI network mode prints usable URLs and serves the chosen folder', async t
     child.stdout.on('data', chunk => { output += chunk; const match = output.match(/Open:\s+(http:\/\/127\.0\.0\.1:(\d+))/); if (match) { clearTimeout(timer); resolve({ output, url: match[1], port: match[2] }); } });
   });
   assert.equal((await fetch(startup.url)).status, 200);
+  assert.match(startup.output, /Thumbnails: disabled/);
+  assert.equal((await (await fetch(startup.url + '/api/albums')).json()).thumbnails, false);
   const address = Object.values(require('node:os').networkInterfaces()).flat().find(item => item.family === 'IPv4' && !item.internal)?.address;
   if (address) {
     assert.ok(startup.output.includes(`http://${address}:${startup.port}`));

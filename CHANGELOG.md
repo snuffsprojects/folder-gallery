@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Optional Sharp image processing, detected automatically when installed beside the script.
+- On-demand WebP thumbnails for covers and grids, with original-quality full-screen images.
+- A 512 MiB user cache with automatic eviction and invalidation when originals change.
+- Two simultaneous image processors, bounded request backlog and fallback to originals.
+- `--no-thumbnails` to retain basic mode without cache access.
+- Installation instructions and tests with and without Sharp, including orientation and transparency.
+
 ## 0.1.0 — 2026-11-04
 
 Initial release:

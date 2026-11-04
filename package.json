@@ -1,0 +1,13 @@
+{
+  "name": "folder-gallery",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A single-file, dependency-free local gallery for images and WebM videos.",
+  "license": "MIT",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node gallery.js",
+    "check": "node --check gallery.js && node --check gallery.test.js",
+    "test": "node --test gallery.test.js"
+  }
+}

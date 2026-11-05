@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Label subfolder and direct-media sections, with sticky jump buttons and direct-file counts for mixed folders.
+- Add a Home shortcut for loose media and real Chromium regression checks at desktop and mobile sizes.
 - Preserve the actual folder hierarchy with immediate-child navigation, ancestor breadcrumbs and a Back button.
 - Show root-level media on Home, keep empty/container-only folders visible and search across all folder paths.
 - Use recursive file counts, sizes and covers for folder cards while keeping each media grid local to its folder.

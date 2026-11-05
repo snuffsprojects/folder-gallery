@@ -7,7 +7,7 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node gallery.js",
-    "check": "node --check gallery.js && node --check gallery.test.js && node --check thumbnail.test.js && node --check video.test.js && node --check hierarchy.test.js",
-    "test": "node --test gallery.test.js thumbnail.test.js video.test.js hierarchy.test.js"
+    "check": "node --check gallery.js && node --check gallery.test.js && node --check thumbnail.test.js && node --check video.test.js && node --check hierarchy.test.js && node --check browser.test.js",
+    "test": "node --test gallery.test.js thumbnail.test.js video.test.js hierarchy.test.js browser.test.js"
   }
 }

@@ -39,6 +39,11 @@ and sizes include their whole branch; the media grid shows only directly
 contained files, with 30 files per page. Filters retain the folder structure even
 when no files match.
 
+For folders containing both images and subfolders, click **Files in this folder
+(N) ↓** in the sticky header to jump past the subfolder cards to that folder's own
+media. **Subfolders (N) ↓** jumps back to the folder list. The direct-file count
+respects your file-type filters; Home has a similar shortcut for its loose media.
+
 ## Optional: faster image previews with Sharp
 
 Stop the gallery, open a terminal in the folder containing `gallery.js`, and run:

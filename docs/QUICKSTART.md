@@ -67,6 +67,11 @@ folders and any directly contained media under **Files in this folder**. Opening
 a folder shows its immediate subfolders and directly contained media. Empty
 folders and folders containing only subfolders stay visible.
 
+If a folder has both subfolders and images, its own images appear below the
+subfolder cards. Click **Files in this folder (N) ↓** in the sticky header to jump
+straight to them, or **Subfolders (N) ↓** to jump back. Home has a shortcut for its
+loose media too. The file count means files directly in this folder, after filtering.
+
 - Use **Back** to move up one folder level, or the breadcrumbs to jump to an
   ancestor, such as **Home → Holidays → Winter**.
 - Use the search box to find folders anywhere in the collection. Results show

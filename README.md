@@ -61,6 +61,12 @@ subfolders of your selected root, plus directly contained media under **Files in
 this folder**. Open a folder to see its immediate subfolders and its own media;
 nested files are never mixed into the parent's image grid.
 
+When a folder contains both subfolders and media, use the sticky header's
+**Files in this folder (N) ↓** button to jump straight to its own images and videos
+below the subfolder cards. **Subfolders (N) ↓** returns to the folder list. The
+media section has its own heading and direct-file count; Home also has a shortcut
+to its directly contained media. These counts respect the active file-type filters.
+
 Folders containing only subfolders, and completely empty folders, remain visible.
 Folder cards show matching file counts and sizes for their whole branch and can
 use a descendant image as a cover. The actual media grid and its pagination only
@@ -306,7 +312,7 @@ node gallery.js [folder] [--port 4180] [--host 127.0.0.1] [--no-thumbnails] [--n
 
 ```bash
 node --check gallery.js
-node --test gallery.test.js thumbnail.test.js video.test.js hierarchy.test.js
+node --test gallery.test.js thumbnail.test.js video.test.js hierarchy.test.js browser.test.js
 ```
 
 Automated checks cover folder discovery, nested-folder separation, sorting,
@@ -333,6 +339,20 @@ Hierarchy tests cover immediate-child navigation, folders with no direct media,
 empty folders, root media pagination and viewing, recursive totals, filters,
 duplicate names, special paths, breadcrumbs, parent navigation, search, rescans
 and responses arriving after the user has navigated elsewhere.
+
+A separate CI job checks mixed-folder layouts in real Chromium at desktop and
+mobile sizes, including jumping to direct media, pagination and parent navigation.
+To run it locally with Node.js 22+, install the test tools and browser:
+
+```bash
+npm install --no-save --package-lock=false playwright sharp
+npx playwright install chromium
+```
+
+Then run `FOLDER_GALLERY_TEST_BROWSER=1 node --test browser.test.js` on Linux/macOS,
+or `$env:FOLDER_GALLERY_TEST_BROWSER='1'; node --test browser.test.js` in PowerShell.
+These tools are only for development tests; the distributed script still needs
+no dependencies for basic use.
 
 ## Contributing
 

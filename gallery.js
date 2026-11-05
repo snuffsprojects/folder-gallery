@@ -438,6 +438,8 @@ function browserApp() {
       : (album.parentId ?? '.') === '.');
     renderFolderCards(filtered, $('#albums'), Boolean(query.length));
     $('#root-files').hidden = Boolean(query.length) || !rootAlbum?.count;
+    $('#jump-root-files').hidden = Boolean(query.length) || !rootAlbum?.count;
+    $('#jump-root-files').textContent = `Files in this folder (${rootAlbum?.count || 0}) ↓`;
     $('#results').textContent = query.length ? `${filtered.length} folders match across the collection` : `${filtered.length} folders · Browse your collection one folder at a time.`;
     $('#empty').hidden = filtered.length > 0 || (!query.length && rootAlbum?.count > 0);
     $('#empty-title').textContent = query.length ? 'No matching folders' : totalImages ? 'No matching files' : 'This folder is empty';
@@ -518,6 +520,13 @@ function browserApp() {
       if (!isRoot) {
         renderFolderCards(data.children || [], $('#folder-children'));
         $('#folder-children').hidden = !data.children?.length;
+        $('#folder-children-title').hidden = !data.children?.length;
+        $('#folder-children-title').textContent = `Subfolders (${data.children?.length || 0})`;
+        $('#folder-files-title').textContent = `Files in this folder (${data.count})`;
+        $('#jump-folder-files').textContent = `Files in this folder (${data.count}) ↓`;
+        $('#jump-folder-files').disabled = !data.count;
+        $('#jump-subfolders').textContent = `Subfolders (${data.children?.length || 0}) ↓`;
+        $('#jump-subfolders').disabled = !data.children?.length;
         $('#album-title').textContent = data.name;
         $('#album-folder').textContent = data.folder;
         renderBreadcrumbs();
@@ -543,6 +552,9 @@ function browserApp() {
     current = album; pageData = null; page = 1; grid.replaceChildren(); $('#viewer-empty').hidden = true;
     document.querySelectorAll('.viewer .pagination').forEach(controls => controls.replaceChildren());
     $('#folder-children').replaceChildren();
+    $('#folder-children-title').hidden = true;
+    $('#jump-folder-files').textContent = 'Files in this folder…'; $('#jump-folder-files').disabled = true;
+    $('#jump-subfolders').textContent = 'Subfolders…'; $('#jump-subfolders').disabled = true;
     $('#album-title').textContent = album.name; $('#album-folder').textContent = album.folder || 'Main folder';
     renderBreadcrumbs();
     if (!viewer.open) viewer.showModal();
@@ -609,6 +621,13 @@ function browserApp() {
     $('#top-home').hidden = viewer.open || window.scrollY < 300;
     $('#top-viewer').hidden = !viewer.open || viewer.scrollTop < 300;
   }
+  function jumpToFolderSection(selector) {
+    const top = $(selector).offsetTop - ($('.viewer-bar').offsetHeight || 160) - 16;
+    viewer.scrollTo({ top: Math.max(0, top), behavior: reducedMotion() ? 'instant' : 'smooth' });
+  }
+  $('#jump-folder-files').addEventListener('click', () => jumpToFolderSection('#folder-files'));
+  $('#jump-subfolders').addEventListener('click', () => jumpToFolderSection('#folder-children-title'));
+  $('#jump-root-files').addEventListener('click', () => window.scrollTo({ top: $('#root-files').offsetTop, behavior: reducedMotion() ? 'instant' : 'smooth' }));
   $('#sort-order').addEventListener('change', event => applySort(event.target.value));
   $('#viewer-sort-order').addEventListener('change', event => applySort(event.target.value));
   $('#toggle-info').addEventListener('click', toggleImageInfo);
@@ -650,14 +669,15 @@ const HTML = String.raw`<!doctype html>
 .video-preview{position:relative;display:grid;place-content:center;gap:12px;min-height:180px;width:100%;height:100%;background:linear-gradient(145deg,#171e29,#0b0f14);text-align:center}.play-symbol{font-size:40px;color:var(--accent)}.video-badge{font-size:11px;letter-spacing:.16em;color:var(--muted)}#video{max-width:100%;max-height:calc(100dvh - 180px);width:auto}.stage.video-stage{cursor:default;touch-action:auto;align-content:center;gap:12px}.download-video{font-size:13px;color:var(--accent)}
 .video-preview.has-preview{aspect-ratio:4/3;overflow:hidden}.video-preview>img{position:absolute;inset:0;width:100%;height:100%;min-height:0;object-fit:cover}.video-preview.has-preview::after{content:'';position:absolute;inset:0;background:#0004}.video-preview>.play-symbol,.video-preview>.video-badge{position:relative;z-index:1;text-shadow:0 2px 5px #000}.video-preview.has-preview>.play-symbol{color:white}.video-preview.has-preview>.video-badge{color:white}
 .folder-preview{font-size:58px}.folder-children{padding:24px clamp(16px,4vw,52px);margin-top:12px}.breadcrumbs{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;margin-bottom:8px}.breadcrumbs button{background:transparent;border:0;padding:4px 0;color:var(--accent);text-decoration:underline}.breadcrumbs [aria-current]{color:var(--text)}.root-files{margin-top:36px}.root-files>.photos{padding:24px 0}.root-files>.pagination{margin:0}#root-error{color:#ffb294}
+.folder-jumps{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.folder-jumps .secondary{min-height:34px;font-size:12px;padding:5px 10px}.folder-section-title{font-size:18px;margin:28px clamp(16px,4vw,52px) 0}.folder-children{padding-top:16px;margin-top:0}#jump-root-files{margin-bottom:24px}#folder-files{padding-top:1px}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <header><div class="brand"><span class="mark">FG</span>Folder Gallery</div><span class="local-label">LOCAL FILES · SIMPLE PLEASURES</span></header>
 <main id="home"><section class="intro"><div><p class="eyebrow">YOUR LOCAL COLLECTION · <span id="root-name">FOLDERS</span></p><h1>A place for your pictures.</h1><p id="totals">Discovering your galleries…</p></div><button id="refresh" class="secondary" type="button">↻ Refresh folders</button></section>
-<label class="search"><span>Find a folder</span><input id="search" type="search" placeholder="Search folder names…" autocomplete="off" aria-controls="albums" aria-describedby="results"></label>${sortControl('sort-order')}<fieldset class="format-filter"><legend>File types</legend><div id="type-filters" class="type-filters"></div></fieldset><p id="results" class="muted" role="status"></p><p id="message" role="status"></p>
+<label class="search"><span>Find a folder</span><input id="search" type="search" placeholder="Search folder names…" autocomplete="off" aria-controls="albums" aria-describedby="results"></label>${sortControl('sort-order')}<fieldset class="format-filter"><legend>File types</legend><div id="type-filters" class="type-filters"></div></fieldset><p id="results" class="muted" role="status"></p><button id="jump-root-files" class="secondary" type="button" hidden>Files in this folder ↓</button><p id="message" role="status"></p>
 <div id="albums" class="albums"></div><section id="empty" hidden><h2 id="empty-title"></h2><p id="empty-copy"></p></section><section id="root-files" class="root-files" hidden><h2>Files in this folder</h2><nav class="pagination root-pagination" aria-label="Home file pages at top"></nav><p id="root-error" role="alert"></p><div id="root-photos" class="photos"></div><nav class="pagination root-pagination" aria-label="Home file pages at bottom"></nav></section><footer>Made from your folders. No uploads. No imports. Your originals stay untouched.</footer></main>
 <button id="top-home" class="top" aria-label="Back to top" title="Back to top" hidden>↑</button>
-<dialog id="viewer" class="viewer" aria-labelledby="album-title"><div class="viewer-bar"><div><nav id="folder-breadcrumbs" class="breadcrumbs" aria-label="Folder path"></nav><small id="album-folder"></small><h2 id="album-title"></h2></div><button id="close-album" class="secondary" type="button">← Back</button></div><div class="viewer-sort">${sortControl('viewer-sort-order')}</div><fieldset class="format-filter viewer-filter"><legend>File types</legend><div id="viewer-type-filters" class="type-filters"></div></fieldset><div id="folder-children" class="albums folder-children"></div><nav class="pagination" aria-label="Gallery pages at top"></nav><p id="viewer-error" role="alert"></p><p id="viewer-empty" class="muted viewer-empty" role="status" hidden>No files match these types. Enable a type above or choose All types.</p><div id="photos" class="photos"></div><nav class="pagination" aria-label="Gallery pages at bottom"></nav><button id="top-viewer" class="top" aria-label="Back to top of gallery" title="Back to top" hidden>↑</button></dialog>
+<dialog id="viewer" class="viewer" aria-labelledby="album-title"><div class="viewer-bar"><div><nav id="folder-breadcrumbs" class="breadcrumbs" aria-label="Folder path"></nav><small id="album-folder"></small><h2 id="album-title"></h2><div class="folder-jumps"><button id="jump-subfolders" class="secondary" type="button" disabled>Subfolders…</button><button id="jump-folder-files" class="secondary" type="button" disabled>Files in this folder…</button></div></div><button id="close-album" class="secondary" type="button">← Back</button></div><div class="viewer-sort">${sortControl('viewer-sort-order')}</div><fieldset class="format-filter viewer-filter"><legend>File types</legend><div id="viewer-type-filters" class="type-filters"></div></fieldset><h3 id="folder-children-title" class="folder-section-title" hidden>Subfolders</h3><div id="folder-children" class="albums folder-children"></div><section id="folder-files"><h3 id="folder-files-title" class="folder-section-title">Files in this folder</h3><nav class="pagination" aria-label="Gallery pages at top"></nav><p id="viewer-error" role="alert"></p><p id="viewer-empty" class="muted viewer-empty" role="status" hidden>No files match these types. Enable a type above or choose All types.</p><div id="photos" class="photos"></div><nav class="pagination" aria-label="Gallery pages at bottom"></nav></section><button id="top-viewer" class="top" aria-label="Back to top of gallery" title="Back to top" hidden>↑</button></dialog>
 <dialog id="lightbox" class="lightbox" aria-label="Full-screen media"><button id="toggle-info" class="secondary info-toggle" type="button" aria-controls="image-info" aria-expanded="false" title="File information (I)">ⓘ Info</button><aside id="image-info" class="image-info" aria-label="File information" hidden><h3>File information</h3><dl id="image-details"></dl></aside><button id="close-image" class="icon lightbox-close" aria-label="Close media">×</button><div id="zoom-tools" class="zoom-tools" aria-label="Image zoom"><button id="zoom-out" class="icon" aria-label="Zoom out">−</button><button id="zoom-reset" class="secondary" aria-label="Reset zoom">100%</button><button id="zoom-in" class="icon" aria-label="Zoom in">+</button></div><button id="previous-image" class="image-nav previous-image" aria-label="Previous item">‹</button><figure id="stage" class="stage" style="margin:0"><img id="photo" alt="" draggable="false"><video id="video" controls playsinline muted preload="metadata" hidden></video><a id="download-video" class="download-video" hidden>Download original WebM</a><figcaption id="caption"></figcaption></figure><p id="image-error" role="alert" hidden>This file cannot be displayed. It may have moved or be unsupported by your browser. For a video, try downloading the original.</p><button id="next-image" class="image-nav next-image" aria-label="Next item">›</button></dialog>
 <script>(${browserApp.toString()})();</script></body></html>`;
 

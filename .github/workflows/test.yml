@@ -50,3 +50,24 @@ jobs:
         env:
           FOLDER_GALLERY_TEST_SHARP: ${{ matrix.sharp && '1' || '' }}
           FOLDER_GALLERY_TEST_FFMPEG: ${{ matrix.ffmpeg && '1' || '' }}
+
+  browser:
+    name: Browser layout (desktop and mobile)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Install browser test tools
+        run: npm install --no-save --package-lock=false playwright sharp
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Test mixed-folder layout
+        run: node --test browser.test.js
+        env:
+          FOLDER_GALLERY_TEST_BROWSER: '1'

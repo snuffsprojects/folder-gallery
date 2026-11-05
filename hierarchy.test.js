@@ -158,3 +158,22 @@ test('browser shows immediate children, root files, breadcrumbs, Back and global
   assert.equal($('#album-title').textContent, 'Archive');
   assert.equal($('#folder-children').children.length, 1);
 });
+
+test('mixed folders return their own paginated media alongside immediate subfolders', async t => {
+  const { root, base } = await collection(t);
+  await fs.mkdir(path.join(root, 'Mixed/Child'), { recursive: true });
+  for (let i = 1; i <= 35; i++) await fs.writeFile(path.join(root, 'Mixed', `direct${i}.jpg`), 'direct');
+  await fs.writeFile(path.join(root, 'Mixed/Child/nested.png'), 'nested');
+  const get = async route => (await fetch(base + route)).json();
+  const page = await get('/api/gallery?id=Mixed');
+  assert.equal(page.count, 35); assert.equal(page.totalCount, 36);
+  assert.equal(page.children.length, 1); assert.equal(page.children[0].id, 'Mixed/Child');
+  assert.equal(page.images.length, 30); assert.equal(page.pages, 2);
+  assert.ok(page.images.every(image => image.url.startsWith('/media/Mixed/direct')));
+  const next = await get('/api/gallery?id=Mixed&page=2');
+  assert.deepEqual(next.images.map(image => image.name), ['direct31.jpg', 'direct32.jpg', 'direct33.jpg', 'direct34.jpg', 'direct35.jpg']);
+  const onlyPng = await get('/api/gallery?id=Mixed&types=png');
+  assert.equal(onlyPng.count, 0); assert.equal(onlyPng.children[0].count, 1);
+  const all = await get('/api/gallery?id=Mixed');
+  assert.equal(all.count, 35); assert.equal(all.children.length, 1);
+});
